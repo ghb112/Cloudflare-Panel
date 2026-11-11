@@ -80,8 +80,9 @@ function zhError(errors) {
     .join(";");
 }
 
-async function cf(env, path, method = "GET", body) {
-  // env.cfToken/cfAcc 由 handleApi 根据当前所选账号写入 (默认回落到 env 配置)
+async function cfJson(env, path, method = "GET", body) {
+  // 返回完整响应信封 (含 result_info 分页信息); 出错时抛中文错误。
+  // R2 的列表接口把分页放 result_info 里 (result 本身是数组或对象), 只取 result 会丢分页。
   const token = env.cfToken || env.CF_API_TOKEN;
   const r = await fetch(API + path, {
     method,
@@ -98,7 +99,11 @@ async function cf(env, path, method = "GET", body) {
     throw new Error("Cloudflare 返回了无法解析的响应 (HTTP " + r.status + ")");
   }
   if (!j.success) throw new Error(zhError(j.errors));
-  return j.result;
+  return j;
+}
+async function cf(env, path, method = "GET", body) {
+  // env.cfToken/cfAcc 由 handleApi 根据当前所选账号写入 (默认回落到 env 配置)
+  return (await cfJson(env, path, method, body)).result;
 }
 
 // ---- R2 存储桶管理: 直接调 Cloudflare API v4 (与 Tunnel 共用同一 Token, 需 Workers R2 Storage 读写权限) ----
@@ -1220,13 +1225,14 @@ async function handleApi(request, env, path) {
 
   // ---- R2 存储桶管理 (与 Tunnel 接口共用同一 API Token, 需 Workers R2 Storage 读写权限) ----
   if (path === "/api/r2/buckets") {
-    // 列出当前账号下全部存储桶 (分页拉满, 最多约 1000 个)
+    // 列出当前账号下全部存储桶 (分页拉满, 最多约 1000 个)。
+    // 注意: R2 列表接口的分页在 result_info 里 (result 只有 buckets 数组), 不能读 result.cursor。
     let buckets = [], cursor = "";
     for (let i = 0; i < 10; i++) {
-      const r = await cf(env, `/accounts/${acc}/r2/buckets?per_page=1000` + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""));
-      const list = Array.isArray(r) ? r : (r.buckets || []);
+      const j = await cfJson(env, `/accounts/${acc}/r2/buckets?per_page=1000` + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""));
+      const list = Array.isArray(j.result) ? j.result : (j.result.buckets || []);
       buckets.push(...list);
-      cursor = (r && r.cursor) || "";
+      cursor = (j.result_info && j.result_info.cursor) || "";
       if (!cursor) break;
     }
     return json({ buckets: buckets.map((b) => ({ name: b.name, creation_date: b.creation_date || "", location: b.location || "" })) });
@@ -1235,9 +1241,14 @@ async function handleApi(request, env, path) {
   if (path === "/api/r2/objects") {
     // 列出某存储桶某前缀下的一层: 不用 delimiter(真实 R2 用 delimiter 会丢掉空文件夹的占位对象),
     // 取扁平列表, 在服务端按 key 推导一层文件夹 + 文件。
-    // 一次拉满: 跟随 cursor 连续拉取多页 (每页 1000 个键), 直到取完或达到上限,
+    // 注意真实 R2 v4 接口的两个坑 (已按官方文档核对):
+    //  (1) 分页参数是 per_page (最大 1000), 不是 limit; 不传时默认每页只返回 20 个;
+    //  (2) result 本身就是对象数组, 分页信息在 result_info 里 (is_truncated / cursor),
+    //      不是 result.truncated / result.cursor, 读错会误以为只有一页。
+    // 一次拉满: 跟随 result_info.cursor 连续拉取多页 (每页 1000 个键), 直到取完或达到上限,
     // 让一层目录的文件/文件夹一次显示全, 不用反复点加载更多; 超出上限时仍返回
     // truncated + cursor, 前端点加载更多可继续取。
+    // 另外 v4 接口的修改时间字段叫 last_modified (不是 uploaded), 一并映射, 否则列表不显示日期。
     const bucket = str(d.bucket);
     if (!bucket) return json({ error: "请选择存储桶" }, 400);
     const prefix = String(d.prefix || "");
@@ -1247,10 +1258,11 @@ async function handleApi(request, env, path) {
     let truncated = false, nextCursor = "";
     const MAX_PAGES = 20; // 单次最多拉 20 页 (约 2 万个键)
     for (let page = 0; page < MAX_PAGES; page++) {
-      const q = `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(prefix)}&limit=1000`
+      const q = `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(prefix)}&per_page=1000`
         + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
-      const r = await cf(env, q);
-      const res = r || {};
+      const j = await cfJson(env, q);
+      const res = j.result;
+      const info = j.result_info || {};
       const rawObjs = Array.isArray(res) ? res : (res.objects || []);
       for (const o of rawObjs) {
         if (!o || !o.key) continue;
@@ -1262,14 +1274,15 @@ async function handleApi(request, env, path) {
         if (i >= 0) folderSet.add(prefix + rest.slice(0, i + 1)); // 有下级: 归入直接子文件夹
         else objects.push(o);
       }
-      // 兼容: 个别返回里仍带 delimitedPrefixes 时也合并进来
-      (res.delimitedPrefixes || res.delimited_prefixes || []).forEach((p) => {
+      // 兼容: 用 delimiter 时公共前缀在 result_info.delimited 里; 个别返回仍带 delimitedPrefixes 时也合并
+      const delimited = info.delimited || (res && (res.delimitedPrefixes || res.delimited_prefixes)) || [];
+      delimited.forEach((p) => {
         let s = String(p);
         if (!s.endsWith("/")) s += "/";
         if (s.startsWith(prefix) && s.length > prefix.length) folderSet.add(s);
       });
-      if (res.truncated && res.cursor) {
-        cursor = res.cursor;
+      if (info.is_truncated && info.cursor) {
+        cursor = info.cursor;
         if (page === MAX_PAGES - 1) { truncated = true; nextCursor = cursor; }
         continue;
       }
@@ -1279,7 +1292,7 @@ async function handleApi(request, env, path) {
     const folders = [...folderSet];
     return json({
       bucket, prefix,
-      objects: objects.map((o) => ({ key: o.key, name: String(o.key).slice(prefix.length), size: o.size || 0, uploaded: o.uploaded || "", etag: o.etag || "" })),
+      objects: objects.map((o) => ({ key: o.key, name: String(o.key).slice(prefix.length), size: o.size || 0, uploaded: o.last_modified || o.uploaded || "", etag: o.etag || "" })),
       folders: folders.map((p) => ({ prefix: p, name: p.slice(prefix.length).replace(/\/$/, "") })),
       truncated, cursor: nextCursor,
     });
@@ -1353,12 +1366,14 @@ async function handleApi(request, env, path) {
     for (const p of prefixes) {
       let cursor = "";
       for (let i = 0; i < 10 && all.length < 5000; i++) {
-        const r = await cf(env, `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(p)}&limit=1000`
+        // 与列表接口同理: 分页参数是 per_page, 分页信息在 result_info 里
+        const j = await cfJson(env, `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(p)}&per_page=1000`
           + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""));
-        const objs = Array.isArray(r) ? r : (r.objects || []);
+        const objs = Array.isArray(j.result) ? j.result : (j.result.objects || []);
         for (const o of objs) if (o && o.key) all.push(o.key);
-        cursor = (r && r.cursor) || "";
-        if (!(r && r.truncated) || !cursor) break;
+        const info = j.result_info || {};
+        cursor = info.cursor || "";
+        if (!info.is_truncated || !cursor) break;
       }
     }
     let deleted = 0;
