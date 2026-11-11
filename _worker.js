@@ -527,6 +527,45 @@ async function storeDel(env, key) {
   return await b.delete(key);
 }
 
+// 按前缀列出键 (键名倒序 = 时间戳大的在前, 即最新的在前); 返回 [{k, v}]
+async function storeListPrefix(env, prefix, limit) {
+  const b = store(env);
+  if (!b) return [];
+  if (isD1(b)) {
+    try {
+      const r = await b.prepare("SELECT k, v FROM state WHERE k LIKE ?1 ORDER BY k DESC LIMIT ?2").bind(prefix + "%", limit).run();
+      return (r.results || []).map((row) => ({ k: row.k, v: JSON.parse(row.v) }));
+    } catch (e) {
+      return [];
+    }
+  }
+  // KV: list 按字典序升序返回, 取尾部最新的 limit 条
+  const listed = await b.list({ prefix, limit: 1000 });
+  const keys = listed.keys.map((x) => x.name).sort().reverse().slice(0, limit);
+  const out = [];
+  for (const k of keys) {
+    const v = await b.get(k, "json");
+    if (v) out.push({ k, v });
+  }
+  return out;
+}
+
+// 删除指定前缀的全部键
+async function storeDelPrefix(env, prefix) {
+  const b = store(env);
+  if (!b) return;
+  if (isD1(b)) {
+    await b.prepare("DELETE FROM state WHERE k LIKE ?1").bind(prefix + "%").run();
+    return;
+  }
+  let cursor;
+  do {
+    const listed = await b.list({ prefix, cursor });
+    await Promise.all(listed.keys.map((x) => b.delete(x.name)));
+    cursor = listed.list_complete ? undefined : listed.cursor;
+  } while (cursor);
+}
+
 async function getMeta(env) {
   const meta = { chats: [], alerts: {}, botToken: "", paused: null, accounts: [], curAcc: "" };
   if (!store(env)) return meta;
@@ -628,14 +667,27 @@ async function readState(env, key) {
   }
 }
 
-// 最近活动记录 (按账号): 新数组放最前, 最多保留 24 条; 失败静默 (不影响主流程)
+// 最近活动记录 (按账号): 每条单独存一个键, 不设上限 (旧的只会越攒越多, 不会丢); 失败静默 (不影响主流程)
+// 键形 act:<acc>:<13位毫秒时间戳>:<4位随机>, 键名倒序即时间倒序, 读最近 100 条直接按前缀列出
+// 兼容旧版: 旧的单键 activity:<acc> (最多 24 条的 JSON 数组) 首次写入时一次性迁移为逐条键后删除
 async function logAct(env, acc, kind, name, detail) {
   if (!store(env)) return;
   try {
-    const key = "activity:" + acc;
-    const list = (await storeGet(env, key)) || [];
-    list.unshift({ t: Date.now(), k: kind, n: String(name || "").slice(0, 60), d: String(detail || "").slice(0, 80) });
-    await storePut(env, key, list.slice(0, 24));
+    const entry = { t: Date.now(), k: kind, n: String(name || "").slice(0, 60), d: String(detail || "").slice(0, 80) };
+    // 一次性迁移旧数组 (只有旧键还存在时才做, 之后不再重复)
+    const old = await storeGet(env, "activity:" + acc);
+    if (Array.isArray(old) && old.length) {
+      for (const o of old) {
+        if (!o || typeof o !== "object") continue;
+        const ts = String(Number(o.t) || 0).padStart(13, "0");
+        const rand = Math.floor(Math.random() * 0xffff).toString(16).padStart(4, "0");
+        await storePut(env, "act:" + acc + ":" + ts + ":" + rand, { t: Number(o.t) || 0, k: String(o.k || ""), n: String(o.n || "").slice(0, 60), d: String(o.d || "").slice(0, 80) });
+      }
+      await storeDel(env, "activity:" + acc);
+    }
+    const ts = String(entry.t).padStart(13, "0");
+    const rand = Math.floor(Math.random() * 0xffff).toString(16).padStart(4, "0");
+    await storePut(env, "act:" + acc + ":" + ts + ":" + rand, entry);
   } catch (e) {}
 }
 
@@ -658,7 +710,9 @@ async function runChecks(env, list) {
   if (!kv) return result; // 没有 KV/D1 就只展示状态, 不发提醒
 
   // 最近活动 (仪表板右栏): 无论是否在防抖窗口内都返回, 读取代价很小
-  result.activity = (await readState(env, "activity:" + accScope)) || [];
+  // 逐条键 act:<acc>:... 按键名倒序即时间倒序, 取最近 100 条; 旧版单键 activity:<acc> 未迁移时兜底读它
+  const actEntries = await storeListPrefix(env, "act:" + accScope + ":", 100);
+  result.activity = actEntries.length ? actEntries.map((e) => e.v) : ((await readState(env, "activity:" + accScope)) || []);
 
   const meta = await getMeta(env);
   // 提醒默认关: 只有 meta.alerts[id].on === true 才发
@@ -1402,7 +1456,8 @@ async function handleApi(request, env, path) {
   }
 
   if (path === "/api/activity/clear") {
-    // 删除全部活动记录 (当前账号): 清掉 D1/KV 里的 activity:<acc>
+    // 删除全部活动记录 (当前账号): 逐条键 act:<acc>:... + 旧版单键 activity:<acc> 都清掉
+    await storeDelPrefix(env, "act:" + acc + ":");
     await storeDel(env, "activity:" + acc);
     return json({ ok: true });
   }
@@ -1729,7 +1784,7 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
 .scroll-y{max-height:395px;overflow-y:auto;overscroll-behavior:contain}
 .actcard{flex:1;min-height:0;display:flex;flex-direction:column}
 .actcard h3{flex:none}
-/* 活动列表: 全部显示 (后端最多存 24 条), 超出 240px 内部滚动; 不把左栏下沿撑高 */
+/* 活动列表: 全部显示 (仪表板取最近 100 条, 更早的仍存在库里不会丢), 超出 240px 内部滚动; 不把左栏下沿撑高 */
 .actcard #acts{flex:1;min-height:0;max-height:240px;overflow-y:auto}
 /* 仪表板 fit 模式: 仅 PC (≥761px) 生效 — 占满视口、卡片内部滚动、整页不滚动、github 链接不出屏。
    手机由媒体查询直接禁用这些规则, fit 类残留也不会隐藏内容 */
