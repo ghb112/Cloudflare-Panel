@@ -1596,23 +1596,23 @@ const HTML = `<!doctype html>
 </script>
 <style>
 /* 设计变量: 颜色 + 三级圆角/阴影体系 */
-:root{--bg:#f4f5f7;--card:#fff;--text:#1d2129;--sub:#7a828e;--line:#e3e6ea;--brand:#f6821f;--brand2:#ff9d4a;--ok:#22a06b;--bad:#d93f3f;--warn:#e8a317;--code:#16181d;--codet:#d7dae0;--side:#1b1e24;--side2:#2a2f38;--sideText:#c9cfd8;--in:#f4f5f7;
+:root{--bg:#f4f5f7;--card:#fff;--text:#1d2129;--sub:#7a828e;--line:#e3e6ea;--brand:#f6821f;--brand2:#ff9d4a;--ok:#22a06b;--bad:#d93f3f;--warn:#e8a317;--code:#16181d;--codet:#d7dae0;--side:#1b1e24;--side2:#2a2f38;--sideText:#c9cfd8;--in:#f4f5f7;--sel:#dbeafe;--frowhov:#eaf2fb;
 --r-sm:8px;--r-md:12px;--r-lg:16px;
 --sh-sm:0 1px 2px rgba(16,20,26,.05),0 1px 6px rgba(16,20,26,.04);
 --sh-md:0 2px 8px rgba(16,20,26,.06),0 8px 24px rgba(16,20,26,.07);
 --sh-lg:0 12px 40px rgba(16,20,26,.16),0 2px 10px rgba(16,20,26,.08);
 --focus:0 0 0 3px rgba(246,130,31,.16)}
-@media(prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#1a1d23;--text:#e8eaee;--sub:#8b93a0;--line:#2a2e36;--code:#0a0b0e;--codet:#c9ccd3;--side:#15181d;--side2:#262b33;--in:#12151a;
+@media(prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#1a1d23;--text:#e8eaee;--sub:#8b93a0;--line:#2a2e36;--code:#0a0b0e;--codet:#c9ccd3;--side:#15181d;--side2:#262b33;--in:#12151a;--sel:#1e3a5f;--frowhov:#262b33;
 --sh-sm:0 1px 2px rgba(0,0,0,.25),0 1px 6px rgba(0,0,0,.2);
 --sh-md:0 2px 8px rgba(0,0,0,.28),0 8px 24px rgba(0,0,0,.25);
 --sh-lg:0 12px 40px rgba(0,0,0,.5),0 2px 10px rgba(0,0,0,.3)}}
 /* 手动主题: html[data-theme=light] 恒为亮色, [data-theme=dark] 恒为暗色; 未设置时跟随系统 */
 /* 侧栏不再恒为深色: 亮色=浅侧栏, 暗色=深侧栏, 切换时肉眼可见 */
-html[data-theme="light"]{--bg:#f4f5f7;--card:#fff;--text:#1d2129;--sub:#7a828e;--line:#e3e6ea;--code:#0f5849;--codet:#d7dae0;--side:#eef0f4;--side2:#dfe3e9;--sideText:#3d4450;--in:#f4f5f7;
+html[data-theme="light"]{--bg:#f4f5f7;--card:#fff;--text:#1d2129;--sub:#7a828e;--line:#e3e6ea;--code:#0f5849;--codet:#d7dae0;--side:#eef0f4;--side2:#dfe3e9;--sideText:#3d4450;--in:#f4f5f7;--sel:#dbeafe;--frowhov:#eaf2fb;
 --sh-sm:0 1px 2px rgba(16,20,26,.05),0 1px 6px rgba(16,20,26,.04);
 --sh-md:0 2px 8px rgba(16,20,26,.06),0 8px 24px rgba(16,20,26,.07);
 --sh-lg:0 12px 40px rgba(16,20,26,.16),0 2px 10px rgba(16,20,26,.08)}
-html[data-theme="dark"]{--bg:#0f1115;--card:#1a1d23;--text:#e8eaee;--sub:#8b93a0;--line:#2a2e36;--code:#0a0b0e;--codet:#c9ccd3;--side:#15181d;--side2:#262b33;--sideText:#c9cfd8;--in:#12151a;
+html[data-theme="dark"]{--bg:#0f1115;--card:#1a1d23;--text:#e8eaee;--sub:#8b93a0;--line:#2a2e36;--code:#0a0b0e;--codet:#c9ccd3;--side:#15181d;--side2:#262b33;--sideText:#c9cfd8;--in:#12151a;--sel:#1e3a5f;--frowhov:#262b33;
 --sh-sm:0 1px 2px rgba(0,0,0,.25),0 1px 6px rgba(0,0,0,.2);
 --sh-md:0 2px 8px rgba(0,0,0,.28),0 8px 24px rgba(0,0,0,.25);
 --sh-lg:0 12px 40px rgba(0,0,0,.5),0 2px 10px rgba(0,0,0,.3)}
@@ -1860,8 +1860,8 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
 .r2bk .bn{font-weight:700;font-size:15px;word-break:break-all}
 .r2bk .bm{font-size:12px;color:var(--sub);margin-top:6px}
 .frow{display:flex;align-items:center;flex-wrap:nowrap;gap:10px;padding:9px 10px;border-radius:10px;cursor:pointer}
-.frow:hover{background:var(--side2)}
-.frow.sel{background:rgba(246,130,31,.13)}
+.frow:hover{background:var(--frowhov)}
+.frow.sel{background:var(--sel)}
 .frow .fi{flex:none;width:20px;text-align:center;font-size:16px}
 .frow .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .frow .fm{flex:none;font-size:12px;color:var(--sub);white-space:nowrap}
