@@ -1,4 +1,4 @@
-// Cloudflare Worker: Cloudflare Tunnel 管理面板
+// Cloudflare Worker: 大爷Cloudflare 管理面板
 // 环境变量 (Settings → Variables and Secrets):
 //   CF_ACCOUNT_ID    账户 ID，创建token时显示
 //   CF_API_TOKEN     API 令牌, 权限: 
@@ -1240,9 +1240,18 @@ async function handleApi(request, env, path) {
     const r = await cf(env, q);
     const res = r || {};
     const rawObjs = Array.isArray(res) ? res : (res.objects || []);
-    // 以 / 结尾的 0 字节对象是"新建文件夹"留下的占位, 不当文件展示 (文件夹由 delimitedPrefixes 展示)
+    // 以 / 结尾的 0 字节对象是"新建文件夹"留下的占位, 不当文件展示。真实 R2 把这类占位对象放回 objects[] 而不是 delimitedPrefixes, 所以文件夹要从两处合并 (去重), 只取当前目录的直接子级
+    const folderSet = new Set((res.delimitedPrefixes || res.delimited_prefixes || []).map((p) => String(p)));
+    rawObjs.forEach((o) => {
+      if (!o || !o.key || o.size) return;
+      const k = String(o.key);
+      if (!k.endsWith("/") || !k.startsWith(prefix) || k.length <= prefix.length) return;
+      const rest = k.slice(prefix.length);
+      if (rest.indexOf("/") !== rest.length - 1) return; // 只收直接子级
+      folderSet.add(k);
+    });
+    const folders = [...folderSet];
     const objects = rawObjs.filter((o) => o && o.key && !(String(o.key).endsWith("/") && !o.size));
-    const folders = (res.delimitedPrefixes || res.delimited_prefixes || []).map((p) => String(p));
     return json({
       bucket, prefix,
       objects: objects.map((o) => ({ key: o.key, name: String(o.key).slice(prefix.length), size: o.size || 0, uploaded: o.uploaded || "", etag: o.etag || "" })),
@@ -1537,7 +1546,7 @@ const HTML = `<!doctype html>
 <link rel="apple-touch-icon" href="/icon-192.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>Cloudflare 隧道管理面板</title>
+<title>大爷Cloudflare 管理面板</title>
 <script>
 // 防闪白: 页面渲染前先把已保存的主题写到 html 根元素 (跟随系统 = 不设置 data-theme)
 (function(){try{
@@ -2100,6 +2109,13 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
   <h3><span>编辑文件 · <span id="r2e_name" style="font-weight:400"></span></span><button class="x" id="r2e_x">✕</button></h3>
   <textarea id="r2e_body" class="r2edit" spellcheck="false"></textarea>
   <div class="btns"><button class="btn gray" id="r2e_cancel">取消</button><button class="btn" id="r2e_save">保存</button></div>
+</div>
+
+<div class="modal" id="mR2Share">
+  <h3><span>共享下载链接</span><button class="x" id="r2s_x">✕</button></h3>
+  <label>任何人打开都可直接下载, 无需登录</label>
+  <input id="r2s_url" readonly autocapitalize="off" autocomplete="off" spellcheck="false">
+  <div class="btns"><button class="btn gray" id="r2s_cancel">关闭</button><button class="btn" id="r2s_copy">复制链接</button></div>
 </div>
 
 <div class="ctxmenu" id="r2menu"></div>
@@ -2926,7 +2942,7 @@ function renderR2List(){
     h+='<div class="frow" data-kind="dir" data-key="'+esc(f.prefix)+'"><input type="checkbox" data-sel="dir:'+esc(f.prefix)+'"'+(r2Sel['dir:'+f.prefix]?' checked':'')+'><span class="fi">📁</span><span class="fn">'+esc(f.name)+'</span><span class="fm">文件夹</span><button class="btn sm gray" data-r2menu="dir" data-key="'+esc(f.prefix)+'">⋯</button></div>';
   });
   objs.forEach(function(o){
-    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+r2FileIcon(o.name)+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2menu="file" data-key="'+esc(o.key)+'">⋯</button></div>';
+    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+r2FileIcon(o.name)+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2share="1" data-key="'+esc(o.key)+'" title="共享链接">🔗</button><button class="btn sm gray" data-r2menu="file" data-key="'+esc(o.key)+'">⋯</button></div>';
   });
   box.innerHTML=h;
   r2UpdateSelBar();
@@ -2934,6 +2950,14 @@ function renderR2List(){
 function r2EnterBucket(b){r2Bucket=b;r2Prefix='';r2Sel={};loadR2Objects(false);}
 function r2EnterDir(prefix){r2Prefix=prefix;r2Sel={};loadR2Objects(false);}
 function r2Download(key){window.open(r2ShareUrl(r2Bucket,key),'_blank');}
+/* ---- 共享链接弹窗 (直接显示完整链接, 点复制或手动选复制) ---- */
+function r2OpenShare(key){
+  $('r2s_url').value=r2ShareUrl(r2Bucket,key);
+  openModal('mR2Share');
+  setTimeout(function(){var u=$('r2s_url');if(u.select)u.select();},50);
+}
+$('r2s_x').onclick=closeModal;$('r2s_cancel').onclick=closeModal;
+$('r2s_copy').onclick=function(){copy($('r2s_url').value);closeModal();};
 /* ---- 右键菜单 ---- */
 var r2MenuCtx=null; // {kind:'file'|'dir'|'blank', key}
 function r2HideMenu(){$('r2menu').className='ctxmenu';r2MenuCtx=null;}
@@ -2948,7 +2972,7 @@ function r2ShowMenu(x,y,html,ctx){
 function r2MenuFor(kind){
   if(kind==='file')
     return '<button data-m="dl">⬇️ 下载</button>'+
-      '<button data-m="share">🔗 复制共享链接</button>'+
+      '<button data-m="share">🔗 共享链接</button>'+
       '<button data-m="edit">✏️ 编辑</button>'+
       '<div class="csep"></div>'+
       '<button data-m="del" class="danger">🗑 删除</button>';
@@ -2965,7 +2989,7 @@ function r2MenuFor(kind){
 async function r2MenuAction(m){
   var ctx=r2MenuCtx;r2HideMenu();if(!ctx)return;
   if(m==='dl'&&ctx.kind==='file')r2Download(ctx.key);
-  else if(m==='share'&&ctx.kind==='file'){copy(r2ShareUrl(r2Bucket,ctx.key));toast('共享链接已复制, 任何人打开都可直接下载');}
+  else if(m==='share'&&ctx.kind==='file')r2OpenShare(ctx.key);
   else if(m==='edit'&&ctx.kind==='file')r2OpenEdit(ctx.key);
   else if(m==='del')r2Delete(ctx.kind==='dir'?{prefixes:[ctx.key]}:{keys:[ctx.key]});
   else if(m==='open'&&ctx.kind==='dir')r2EnterDir(ctx.key);
@@ -2985,6 +3009,8 @@ document.addEventListener('click',function(e){
   if(!e.target.closest('#r2menu'))r2HideMenu();
   var t=e.target.closest('[data-r2menu]');
   if(t){e.stopPropagation();var r=t.getBoundingClientRect();r2ShowMenu(r.left,r.bottom+4,r2MenuFor(t.dataset.r2menu),{kind:t.dataset.r2menu,key:t.dataset.key});return}
+  var sh=e.target.closest('[data-r2share]');
+  if(sh){r2OpenShare(sh.dataset.key);return}
   var m=e.target.closest('#r2menu [data-m]');
   if(m){r2MenuAction(m.dataset.m);return}
   var bk=e.target.closest('[data-r2bk]');
@@ -3056,6 +3082,8 @@ $('r2c_save').onclick=async function(){
       toast('文件已创建');
     }
     closeModal();loadR2Objects(false);
+    // R2 列表是最终一致的, 刚建的文件夹可能要过一两秒才出现在列表里, 再补刷一次
+    if(r2CreateMode==='dir'){var bk=r2Bucket,pf=r2Prefix;setTimeout(function(){if(r2Bucket===bk&&r2Prefix===pf)loadR2Objects(false)},2500);}
   }catch(e){fail(e)}
   b.disabled=false;b.innerHTML='创建';
 };
