@@ -1234,40 +1234,54 @@ async function handleApi(request, env, path) {
 
   if (path === "/api/r2/objects") {
     // 列出某存储桶某前缀下的一层: 不用 delimiter(真实 R2 用 delimiter 会丢掉空文件夹的占位对象),
-    // 取一页扁平列表, 在服务端按 key 推导一层文件夹 + 文件
+    // 取扁平列表, 在服务端按 key 推导一层文件夹 + 文件。
+    // 一次拉满: 跟随 cursor 连续拉取多页 (每页 1000 个键), 直到取完或达到上限,
+    // 让一层目录的文件/文件夹一次显示全, 不用反复点加载更多; 超出上限时仍返回
+    // truncated + cursor, 前端点加载更多可继续取。
     const bucket = str(d.bucket);
     if (!bucket) return json({ error: "请选择存储桶" }, 400);
     const prefix = String(d.prefix || "");
-    const cursor = str(d.cursor);
-    const q = `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(prefix)}&limit=1000`
-      + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
-    const r = await cf(env, q);
-    const res = r || {};
-    const rawObjs = Array.isArray(res) ? res : (res.objects || []);
+    let cursor = str(d.cursor);
     const folderSet = new Set();
     const objects = [];
-    for (const o of rawObjs) {
-      if (!o || !o.key) continue;
-      const k = String(o.key);
-      if (!k.startsWith(prefix)) continue;
-      const rest = k.slice(prefix.length);
-      if (!rest) continue; // key 本身等于当前前缀 (本目录的占位), 不展示
-      const i = rest.indexOf("/");
-      if (i >= 0) folderSet.add(prefix + rest.slice(0, i + 1)); // 有下级: 归入直接子文件夹
-      else objects.push(o);
+    let truncated = false, nextCursor = "";
+    const MAX_PAGES = 20; // 单次最多拉 20 页 (约 2 万个键)
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const q = `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(prefix)}&limit=1000`
+        + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+      const r = await cf(env, q);
+      const res = r || {};
+      const rawObjs = Array.isArray(res) ? res : (res.objects || []);
+      for (const o of rawObjs) {
+        if (!o || !o.key) continue;
+        const k = String(o.key);
+        if (!k.startsWith(prefix)) continue;
+        const rest = k.slice(prefix.length);
+        if (!rest) continue; // key 本身等于当前前缀 (本目录的占位), 不展示
+        const i = rest.indexOf("/");
+        if (i >= 0) folderSet.add(prefix + rest.slice(0, i + 1)); // 有下级: 归入直接子文件夹
+        else objects.push(o);
+      }
+      // 兼容: 个别返回里仍带 delimitedPrefixes 时也合并进来
+      (res.delimitedPrefixes || res.delimited_prefixes || []).forEach((p) => {
+        let s = String(p);
+        if (!s.endsWith("/")) s += "/";
+        if (s.startsWith(prefix) && s.length > prefix.length) folderSet.add(s);
+      });
+      if (res.truncated && res.cursor) {
+        cursor = res.cursor;
+        if (page === MAX_PAGES - 1) { truncated = true; nextCursor = cursor; }
+        continue;
+      }
+      cursor = "";
+      break;
     }
-    // 兼容: 个别返回里仍带 delimitedPrefixes 时也合并进来
-    (res.delimitedPrefixes || res.delimited_prefixes || []).forEach((p) => {
-      let s = String(p);
-      if (!s.endsWith("/")) s += "/";
-      if (s.startsWith(prefix) && s.length > prefix.length) folderSet.add(s);
-    });
     const folders = [...folderSet];
     return json({
       bucket, prefix,
       objects: objects.map((o) => ({ key: o.key, name: String(o.key).slice(prefix.length), size: o.size || 0, uploaded: o.uploaded || "", etag: o.etag || "" })),
       folders: folders.map((p) => ({ prefix: p, name: p.slice(prefix.length).replace(/\/$/, "") })),
-      truncated: !!res.truncated, cursor: res.cursor || "",
+      truncated, cursor: nextCursor,
     });
   }
 
