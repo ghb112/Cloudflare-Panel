@@ -2915,7 +2915,7 @@ function r2Crumbs(){
   if(!r2Bucket){c.style.display='none';return}
   c.style.display='';
   var segs=r2Prefix.split('/').filter(Boolean);
-  var html='<button data-crumb="">🪣 '+esc(r2Bucket)+'</button>';
+  var html='<button data-r2home="1">‹ 存储桶</button><span class="sep">/</span><button data-crumb="">🪣 '+esc(r2Bucket)+'</button>';
   var acc='';
   segs.forEach(function(s){acc+=s+'/';html+='<span class="sep">/</span><button data-crumb="'+esc(acc)+'">'+esc(s)+'</button>'});
   c.innerHTML=html;
@@ -2950,6 +2950,7 @@ function renderR2List(){
   box.innerHTML=h;
   r2UpdateSelBar();
 }
+function r2ExitBucket(){r2Bucket='';r2Prefix='';r2Sel={};r2Objects=[];r2Folders=[];loadR2Buckets();}
 function r2EnterBucket(b){r2Bucket=b;r2Prefix='';r2Sel={};loadR2Objects(false);}
 function r2EnterDir(prefix){r2Prefix=prefix;r2Sel={};loadR2Objects(false);}
 function r2Download(key){window.open(r2ShareUrl(r2Bucket,key),'_blank');}
@@ -2972,6 +2973,8 @@ document.addEventListener('click',function(e){
   if(del){r2Delete(del.dataset.r2del==='dir'?{prefixes:[del.dataset.key]}:{keys:[del.dataset.key]});return}
   var bk=e.target.closest('[data-r2bk]');
   if(bk){r2EnterBucket(bk.dataset.r2bk);return}
+  var hm=e.target.closest('[data-r2home]');
+  if(hm){r2ExitBucket();return}
   var cb=e.target.closest('[data-crumb]');
   if(cb){r2Prefix=cb.dataset.crumb;r2Sel={};loadR2Objects(false);return}
   var row=e.target.closest('.frow');
