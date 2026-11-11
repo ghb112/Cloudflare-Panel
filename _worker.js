@@ -1,4 +1,4 @@
-// Cloudflare Worker: 大爷Cloudflare 管理面板
+// Cloudflare Worker: 大爷 Cloudflare 管理面板
 // 环境变量 (Settings → Variables and Secrets):
 //   CF_ACCOUNT_ID    账户 ID，创建token时显示
 //   CF_API_TOKEN     API 令牌, 权限: 
@@ -1453,7 +1453,7 @@ const LOGIN_HTML = `<!doctype html>
 <html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#f6821f">
-<title>登录 · 大爷Cloudflare Control</title>
+<title>登录 · 大爷 Cloudflare Control</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
 body{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;
@@ -1506,7 +1506,7 @@ button.oks{opacity:1;background:linear-gradient(135deg,#17a35f,#2ecc7d);box-shad
 <div class="wrap">
   <form class="card" id="f" novalidate>
     <div class="logo">${CF_LOGO}</div>
-    <h1>大爷Cloudflare Control</h1>
+    <h1>大爷 Cloudflare Control</h1>
     <p class="sub">Tunnel 管理与 R2 管理</p>
     <div class="field">
       <span class="li"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
@@ -1554,7 +1554,7 @@ const HTML = `<!doctype html>
 <link rel="apple-touch-icon" href="/icon-192.png">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>大爷Cloudflare 管理面板</title>
+<title>大爷 Cloudflare 管理面板</title>
 <script>
 // 防闪白: 页面渲染前先把已保存的主题写到 html 根元素 (跟随系统 = 不设置 data-theme)
 (function(){try{
@@ -1816,6 +1816,28 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
 .chat .cn b{display:block;font-size:14px}
 .chat .cn span{font-size:12px;color:var(--sub);word-break:break-all}
 .side-toggle{display:none;background:none;border:1px solid var(--line);border-radius:9px;padding:5px 10px;font-size:16px;color:var(--text);cursor:pointer}
+
+/* ---- R2 存储桶 ---- */
+.r2crumbs{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:14px;margin:0 0 12px}
+.r2crumbs button{background:none;border:0;color:var(--brand);cursor:pointer;font-size:14px;font-weight:700;padding:2px 4px}
+.r2crumbs button:hover{text-decoration:underline}
+.r2crumbs .sep{color:var(--sub)}
+.r2grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.r2bk{cursor:pointer}
+.r2bk:hover{border-color:var(--brand)}
+.r2bk .bn{font-weight:700;font-size:15px;word-break:break-all}
+.r2bk .bm{font-size:12px;color:var(--sub);margin-top:6px}
+.frow{display:flex;align-items:center;flex-wrap:nowrap;gap:10px;padding:9px 10px;border-radius:10px;cursor:pointer}
+.frow:hover{background:var(--side2)}
+.frow.sel{background:rgba(246,130,31,.13)}
+.frow .fi{flex:none;width:20px;text-align:center;font-size:16px}
+.frow .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.frow .fm{flex:none;font-size:12px;color:var(--sub);white-space:nowrap}
+.frow input[type=checkbox]{order:-1;flex:none;width:16px;height:16px;padding:0;margin:0;accent-color:#f6821f;cursor:pointer}
+.r2selbar{display:none;align-items:center;gap:10px;margin:0 0 12px;padding:9px 12px;border-radius:12px;background:rgba(246,130,31,.12);border:1px solid rgba(246,130,31,.35);font-size:13.5px}
+.r2selbar.show{display:flex}
+.r2edit{width:100%;min-height:min(56vh,540px);resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.6;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--in);color:var(--text);outline:none}
+.r2edit:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(246,130,31,.18)}
 @media(max-width:760px){
   .stats{grid-template-columns:repeat(2,1fr);gap:10px}
   .stat{padding:14px}
@@ -1852,28 +1874,6 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
   .amrow > div{flex:none !important;width:100%}
   .amhint{display:block;margin-top:2px}
   .toolbar{gap:8px}
-
-  /* ---- R2 存储桶 ---- */
-  .r2crumbs{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:14px;margin:0 0 12px}
-  .r2crumbs button{background:none;border:0;color:var(--brand);cursor:pointer;font-size:14px;font-weight:700;padding:2px 4px}
-  .r2crumbs button:hover{text-decoration:underline}
-  .r2crumbs .sep{color:var(--sub)}
-  .r2grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
-  .r2bk{cursor:pointer}
-  .r2bk:hover{border-color:var(--brand)}
-  .r2bk .bn{font-weight:700;font-size:15px;word-break:break-all}
-  .r2bk .bm{font-size:12px;color:var(--sub);margin-top:6px}
-  .frow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;cursor:pointer}
-  .frow:hover{background:var(--side2)}
-  .frow.sel{background:rgba(246,130,31,.13)}
-  .frow .fi{flex:none;width:20px;text-align:center;font-size:16px}
-  .frow .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-  .frow .fm{flex:none;font-size:12px;color:var(--sub);white-space:nowrap}
-  .frow input[type=checkbox]{flex:none;width:16px;height:16px;accent-color:#f6821f;cursor:pointer}
-  .r2selbar{display:none;align-items:center;gap:10px;margin:0 0 12px;padding:9px 12px;border-radius:12px;background:rgba(246,130,31,.12);border:1px solid rgba(246,130,31,.35);font-size:13.5px}
-  .r2selbar.show{display:flex}
-  .r2edit{width:100%;min-height:300px;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.6;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--in);color:var(--text);outline:none}
-  .r2edit:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(246,130,31,.18)}
 }
 </style></head><body>
 <div class="app">
