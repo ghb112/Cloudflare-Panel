@@ -62,6 +62,8 @@ const ZH_ERRORS = [
   [/tunnel.*not found/i, "隧道不存在或已被删除"],
   [/r2.*(permission|not authorized|forbidden)|requires.*r2 storage|user does not have.*r2/i,
     "API 令牌缺少 R2 权限, 请给 Token 加上: 帐户 → Workers R2 Storage → Read & Edit"],
+  [/please enable r2/i,
+    "该账号未开通 R2, 请到 Cloudflare 控制台开通: 控制台 → R2 → 添加 R2 订阅 (需绑定付款方式, 免费额度内不收费), 开通后刷新再试"],
   [/bucket not found|no such bucket/i, "存储桶不存在"],
   [/object not found|no such key/i, "文件不存在"],
 ];
@@ -70,6 +72,7 @@ function zhError(errors) {
   if (!Array.isArray(errors) || !errors.length) return "Cloudflare 返回了未知错误";
   return errors
     .map((e) => {
+      if (e && Number(e.code) === 10042) return "该账号未开通 R2, 请到 Cloudflare 控制台开通: 控制台 → R2 → 添加 R2 订阅 (需绑定付款方式, 免费额度内不收费), 开通后刷新再试";
       const msg = String((e && e.message) || "");
       for (const [re, zh] of ZH_ERRORS) if (re.test(msg)) return zh;
       return "Cloudflare 返回错误" + (e && e.code ? " (" + e.code + ")" : "") + ": " + msg;
