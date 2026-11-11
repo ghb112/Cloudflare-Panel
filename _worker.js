@@ -2462,6 +2462,9 @@ function applyFit(){
   $('content').className='content'+(fit?' fit':'');
 }
 function show(v){
+  // 切回仪表板时实时刷新 (含最近活动): R2 操作后点回仪表板要看到刚记的条目;
+  // 启动时 curView 已是 dash, 不重复拉取 (启动链路里 loadAccs 后会拉一次)
+  var needReload=v==='dash'&&curView!=='dash';
   curView=v;
   document.querySelectorAll('.nav a').forEach(function(a){a.className=a.dataset.v===v?'on':''});
   document.querySelectorAll('.view').forEach(function(s){s.className='view'+(s.id==='v-'+v?' on':'')});
@@ -2469,6 +2472,7 @@ function show(v){
   $('sidenav').className='sidenav';
   applyFit();
   if(v==='r2'&&!r2Bucket)loadR2Buckets(); // 首次进入 R2 页拉存储桶列表 (已在桶内时保持当前目录)
+  if(needReload)loadList();
 }
 window.addEventListener('resize',applyFit);
 document.querySelectorAll('.nav a').forEach(function(a){a.onclick=function(){show(a.dataset.v)}});
