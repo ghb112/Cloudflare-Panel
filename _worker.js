@@ -1872,12 +1872,6 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
   .frow input[type=checkbox]{flex:none;width:16px;height:16px;accent-color:#f6821f;cursor:pointer}
   .r2selbar{display:none;align-items:center;gap:10px;margin:0 0 12px;padding:9px 12px;border-radius:12px;background:rgba(246,130,31,.12);border:1px solid rgba(246,130,31,.35);font-size:13.5px}
   .r2selbar.show{display:flex}
-  .ctxmenu{position:fixed;z-index:200;min-width:190px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:5px;box-shadow:0 14px 40px rgba(0,0,0,.45);display:none}
-  .ctxmenu.show{display:block}
-  .ctxmenu button{display:flex;width:100%;align-items:center;gap:9px;padding:9px 11px;border:0;background:none;color:var(--text);font-size:13.5px;cursor:pointer;border-radius:8px;text-align:left}
-  .ctxmenu button:hover{background:var(--side2)}
-  .ctxmenu button.danger{color:var(--bad)}
-  .ctxmenu .csep{height:1px;background:var(--line);margin:4px 6px}
   .r2edit{width:100%;min-height:300px;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.6;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--in);color:var(--text);outline:none}
   .r2edit:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(246,130,31,.18)}
 }
@@ -1969,7 +1963,7 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
           <div id="r2list"><div class="empty">加载中...</div></div>
           <div style="text-align:center;margin-top:12px"><button class="btn gray" id="r2more" style="display:none">加载更多</button></div>
         </div>
-        <div class="hint" style="margin-top:10px">点击文件可选中；每行末尾有分享、下载、删除按钮；右键点击文件 / 文件夹或空白处可调出操作菜单 (手机上点每行右侧的 ⋯ 按钮)；上传时在文件选择框里按住 Ctrl 可多选；删除时勾选复选框可多选。共享链接任何人打开都可直接下载，请勿分享敏感文件。</div>
+        <div class="hint" style="margin-top:10px">点击文件可选中；每行末尾有分享、下载、编辑、删除按钮；上传时在文件选择框里按住 Ctrl 可多选；删除时勾选复选框可多选。共享链接任何人打开都可直接下载，请勿分享敏感文件。</div>
       </section>
 
       <section class="view" id="v-tg">
@@ -2125,8 +2119,6 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
   <input id="r2s_url" readonly autocapitalize="off" autocomplete="off" spellcheck="false">
   <div class="btns"><button class="btn gray" id="r2s_cancel">关闭</button><button class="btn" id="r2s_copy">复制链接</button></div>
 </div>
-
-<div class="ctxmenu" id="r2menu"></div>
 
 <script>
 var $=function(i){return document.getElementById(i)};
@@ -2947,10 +2939,10 @@ function renderR2List(){
   if(!folders.length&&!objs.length){box.innerHTML='<div class="empty">当前目录为空，右键空白处可上传 / 新建</div>';return}
   var h='';
   folders.forEach(function(f){
-    h+='<div class="frow" data-kind="dir" data-key="'+esc(f.prefix)+'"><input type="checkbox" data-sel="dir:'+esc(f.prefix)+'"'+(r2Sel['dir:'+f.prefix]?' checked':'')+'><span class="fi">📁</span><span class="fn">'+esc(f.name)+'</span><span class="fm">文件夹</span><button class="btn sm gray" data-r2del="dir" data-key="'+esc(f.prefix)+'" title="删除文件夹">🗑</button><button class="btn sm gray" data-r2menu="dir" data-key="'+esc(f.prefix)+'">⋯</button></div>';
+    h+='<div class="frow" data-kind="dir" data-key="'+esc(f.prefix)+'"><input type="checkbox" data-sel="dir:'+esc(f.prefix)+'"'+(r2Sel['dir:'+f.prefix]?' checked':'')+'><span class="fi">📁</span><span class="fn">'+esc(f.name)+'</span><span class="fm">文件夹</span><button class="btn sm gray" data-r2del="dir" data-key="'+esc(f.prefix)+'" title="删除文件夹">🗑</button></div>';
   });
   objs.forEach(function(o){
-    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+r2FileIcon(o.name)+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2share="1" data-key="'+esc(o.key)+'" title="共享链接">🔗</button><button class="btn sm gray" data-r2dl="1" data-key="'+esc(o.key)+'" title="下载">⬇️</button><button class="btn sm gray" data-r2del="file" data-key="'+esc(o.key)+'" title="删除">🗑</button><button class="btn sm gray" data-r2menu="file" data-key="'+esc(o.key)+'">⋯</button></div>';
+    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+r2FileIcon(o.name)+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2share="1" data-key="'+esc(o.key)+'" title="共享链接">🔗</button><button class="btn sm gray" data-r2dl="1" data-key="'+esc(o.key)+'" title="下载">⬇️</button><button class="btn sm gray" data-r2edit="1" data-key="'+esc(o.key)+'" title="编辑">✏️</button><button class="btn sm gray" data-r2del="file" data-key="'+esc(o.key)+'" title="删除">🗑</button></div>';
   });
   box.innerHTML=h;
   r2UpdateSelBar();
@@ -2966,65 +2958,15 @@ function r2OpenShare(key){
 }
 $('r2s_x').onclick=closeModal;$('r2s_cancel').onclick=closeModal;
 $('r2s_copy').onclick=function(){copy($('r2s_url').value);closeModal();};
-/* ---- 右键菜单 ---- */
-var r2MenuCtx=null; // {kind:'file'|'dir'|'blank', key}
-function r2HideMenu(){$('r2menu').className='ctxmenu';r2MenuCtx=null;}
-function r2ShowMenu(x,y,html,ctx){
-  var m=$('r2menu');
-  m.innerHTML=html;r2MenuCtx=ctx;
-  m.className='ctxmenu show';
-  var w=m.offsetWidth,h=m.offsetHeight;
-  m.style.left=Math.max(4,Math.min(x,window.innerWidth-w-8))+'px';
-  m.style.top=Math.max(4,Math.min(y,window.innerHeight-h-8))+'px';
-}
-function r2MenuFor(kind){
-  if(kind==='file')
-    return '<button data-m="dl">⬇️ 下载</button>'+
-      '<button data-m="share">🔗 共享链接</button>'+
-      '<button data-m="edit">✏️ 编辑</button>'+
-      '<div class="csep"></div>'+
-      '<button data-m="del" class="danger">🗑 删除</button>';
-  if(kind==='dir')
-    return '<button data-m="open">📂 打开</button>'+
-      '<div class="csep"></div>'+
-      '<button data-m="del" class="danger">🗑 删除文件夹</button>';
-  return '<button data-m="upload">⬆️ 上传文件</button>'+
-    '<button data-m="newfile">📄 新建文件</button>'+
-    '<button data-m="newdir">📁 新建文件夹</button>'+
-    '<div class="csep"></div>'+
-    '<button data-m="refresh">🔄 刷新</button>';
-}
-async function r2MenuAction(m){
-  var ctx=r2MenuCtx;r2HideMenu();if(!ctx)return;
-  if(m==='dl'&&ctx.kind==='file')r2Download(ctx.key);
-  else if(m==='share'&&ctx.kind==='file')r2OpenShare(ctx.key);
-  else if(m==='edit'&&ctx.kind==='file')r2OpenEdit(ctx.key);
-  else if(m==='del')r2Delete(ctx.kind==='dir'?{prefixes:[ctx.key]}:{keys:[ctx.key]});
-  else if(m==='open'&&ctx.kind==='dir')r2EnterDir(ctx.key);
-  else if(m==='upload')$('r2file').click();
-  else if(m==='newfile')r2OpenCreate('file');
-  else if(m==='newdir')r2OpenCreate('dir');
-  else if(m==='refresh')loadR2Objects(false);
-}
-$('r2list').addEventListener('contextmenu',function(e){
-  e.preventDefault();
-  if(!r2Bucket)return; // 存储桶列表页不弹菜单
-  var row=e.target.closest('.frow');
-  if(row)r2ShowMenu(e.clientX,e.clientY,r2MenuFor(row.dataset.kind),{kind:row.dataset.kind,key:row.dataset.key});
-  else r2ShowMenu(e.clientX,e.clientY,r2MenuFor('blank'),{kind:'blank'});
-});
 document.addEventListener('click',function(e){
-  if(!e.target.closest('#r2menu'))r2HideMenu();
-  var t=e.target.closest('[data-r2menu]');
-  if(t){e.stopPropagation();var r=t.getBoundingClientRect();r2ShowMenu(r.left,r.bottom+4,r2MenuFor(t.dataset.r2menu),{kind:t.dataset.r2menu,key:t.dataset.key});return}
   var sh=e.target.closest('[data-r2share]');
   if(sh){r2OpenShare(sh.dataset.key);return}
   var dl=e.target.closest('[data-r2dl]');
   if(dl){r2Download(dl.dataset.key);return}
+  var ed=e.target.closest('[data-r2edit]');
+  if(ed){r2OpenEdit(ed.dataset.key);return}
   var del=e.target.closest('[data-r2del]');
   if(del){r2Delete(del.dataset.r2del==='dir'?{prefixes:[del.dataset.key]}:{keys:[del.dataset.key]});return}
-  var m=e.target.closest('#r2menu [data-m]');
-  if(m){r2MenuAction(m.dataset.m);return}
   var bk=e.target.closest('[data-r2bk]');
   if(bk){r2EnterBucket(bk.dataset.r2bk);return}
   var cb=e.target.closest('[data-crumb]');
