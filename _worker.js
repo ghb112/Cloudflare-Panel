@@ -1315,6 +1315,7 @@ async function handleApi(request, env, path) {
         uploaded.push(f.name);
       } catch (e) { failed.push({ name: f.name, error: String((e && e.message) || e) }); }
     }
+    if (uploaded.length) await logAct(env, acc, "r2up", uploaded.length === 1 ? uploaded[0] : ("共 " + uploaded.length + " 个文件"), bucket);
     return json({ ok: true, uploaded, failed });
   }
 
@@ -1325,6 +1326,7 @@ async function handleApi(request, env, path) {
     if (!bucket || !key) return json({ error: "请填写文件名" }, 400);
     if (!validR2Key(key)) return json({ error: "文件名不合法 (不能含 .. 或以 / 开头)" }, 400);
     await r2PutObject(env, acc, bucket, key, new TextEncoder().encode(content), contentTypeFor(key));
+    await logAct(env, acc, "r2save", key.split("/").pop(), bucket);
     return json({ ok: true, key });
   }
 
@@ -1353,6 +1355,7 @@ async function handleApi(request, env, path) {
     if (!bucket || !name) return json({ error: "请填写文件夹名" }, 400);
     if (!validR2Key(prefix + name + "/")) return json({ error: "文件夹名不合法 (不能含 .. 或空段)" }, 400);
     await r2PutObject(env, acc, bucket, prefix + name + "/", new Uint8Array(0), "application/octet-stream");
+    await logAct(env, acc, "r2mkdir", name, bucket);
     return json({ ok: true, prefix: prefix + name + "/" });
   }
 
@@ -1384,7 +1387,24 @@ async function handleApi(request, env, path) {
         deleted++;
       } catch (e) { failed.push({ key, error: String((e && e.message) || e) }); }
     }
+    if (deleted > 0) {
+      var isFolderOnly = prefixes.length > 0 && keys.length === 0;
+      var delName;
+      if (isFolderOnly) {
+        delName = prefixes.length === 1 ? prefixes[0].replace(/\/$/, "").split("/").pop() : ("共 " + prefixes.length + " 个文件夹");
+        await logAct(env, acc, "r2deld", delName, bucket);
+      } else {
+        delName = deleted === 1 ? ([...new Set(all)][0] || "").replace(/\/$/, "").split("/").pop() : ("共 " + deleted + " 个文件");
+        await logAct(env, acc, "r2del", delName, bucket);
+      }
+    }
     return json({ ok: true, deleted, failed });
+  }
+
+  if (path === "/api/activity/clear") {
+    // 删除全部活动记录 (当前账号): 清掉 D1/KV 里的 activity:<acc>
+    await storeDel(env, "activity:" + acc);
+    return json({ ok: true });
   }
 
   return json({ error: "未知接口" }, 404);
@@ -1954,7 +1974,7 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
               <div id="zdist"><div class="empty">加载中...</div></div>
             </div>
             <div class="card actcard" style="margin-bottom:0">
-              <h3><span>最近活动</span></h3>
+              <h3><span>最近活动</span><button class="btn sm gray" id="actclear" title="删除全部活动记录">清空</button></h3>
               <div id="acts"><div class="empty">加载中...</div></div>
             </div>
           </div>
@@ -2443,12 +2463,14 @@ function actTime(ms){
 }
 function renderAct(list){
   var box=$('acts');list=list||[];
-  if(!list.length){box.innerHTML='<div class="empty">暂无活动记录<br><span style="font-size:11.5px">创建/删除隧道、隧道上下线会显示在这里</span></div>';return}
-  var K={add:['创建','var(--ok)'],del:['删除','var(--bad)'],off:['离线','var(--bad)'],on:['恢复在线','var(--ok)']};
+  if(!list.length){box.innerHTML='<div class="empty">暂无活动记录<br><span style="font-size:11.5px">创建/删除隧道、隧道上下线、R2 上传/保存/删除会显示在这里</span></div>';return}
+  var K={add:['创建隧道','var(--ok)'],del:['删除隧道','var(--bad)'],off:['隧道离线','var(--bad)'],on:['隧道恢复在线','var(--ok)'],
+    r2up:['上传文件','var(--ok)'],r2save:['保存文件','var(--ok)'],r2mkdir:['新建文件夹','var(--ok)'],
+    r2del:['删除文件','var(--bad)'],r2deld:['删除文件夹','var(--bad)']};
   box.innerHTML=list.slice(0,4).map(function(a){
     var k=K[a.k]||['事件','var(--sub)'];
     return '<div class="act"><span class="ad" style="background:'+k[1]+'"></span>'+
-      '<div class="at">'+k[0]+'隧道 <b>'+esc(a.n)+'</b>'+(a.d?'<span class="as">'+esc(a.d)+'</span>':'')+'</div>'+
+      '<div class="at">'+k[0]+' <b>'+esc(a.n)+'</b>'+(a.d?'<span class="as">'+esc(a.d)+'</span>':'')+'</div>'+
       '<span class="az">'+actTime(a.t)+'</span></div>';
   }).join('');
 }
@@ -2534,6 +2556,11 @@ $('refresh').onclick=async function(){
     toast('列表已刷新')
   }catch(e){}
   b.disabled=false;b.innerHTML='刷新';
+};
+/* ---- 最近活动: 清空全部记录 (当前账号) ---- */
+$('actclear').onclick=async function(){
+  if(!(await askConfirm('确定删除全部活动记录吗?\\n删除后无法恢复。','清空活动记录','删除全部')))return;
+  try{await api('/api/activity/clear',{});await loadList();toast('活动记录已清空');}catch(e){fail(e)}
 };
 async function loadList(){
   var l=$('list');
