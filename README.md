@@ -33,6 +33,7 @@
 | 🔐 **密码登录** | 会话 Cookie 签名有效期 7 天，登录接口有防爆破延时，密码框支持显隐切换 |
 | 👥 **多账号管理** | 顶栏下拉切换 Cloudflare 账号；添加账号先验证再保存（Token 只存 D1/KV），列表/路由/提醒按账号隔离 |
 | 🖥️ **隧道管理** | 状态徽章（在线/降级/离线 + 运行时长）、搜索过滤、查看启动 Token、编辑（多路由可选中要改的那条）、删除 |
+| 🪣 **R2 存储桶** | 列出当前账号全部存储桶；进桶浏览文件/文件夹，上传（文件选择框里按住 Ctrl 多选）、下载、在线编辑文本文件、新建文件/文件夹、复选框多选删除；右键菜单操作；一键复制免登录共享下载链接 |
 | ➕ **新建隧道** | 选域名 + 子域名 + 可选路径 + 本地服务地址，自动创建隧道并配置 DNS CNAME |
 | 🌐 **多路由管理** | 单条隧道最多 60 条"域名 + 路径 → 服务"规则，自动处理 DNS，冲突时拒绝写入 |
 | 📣 **Telegram 提醒** | 状态**变化**才推送、按隧道逐个开关（默认关）、多接收者、暂停/恢复、测试发送 |
@@ -111,6 +112,7 @@ wrangler deploy
 | DNS & Zones | Account DNS Settings | Read + Edit |
 | DNS & Zones | DNS View | Read + Edit |
 | Cloudflare Tunnel（或 Argo Tunnel） | Cloudflare Tunnel | Read + Edit |
+| Workers R2 Storage | Workers R2 Storage | Read + Edit |
 
 **区域级（Zone Resources 选"所有域名 / All zones"）：**
 
@@ -121,7 +123,7 @@ wrangler deploy
 | DNS & Zones | Zone DNS Settings | Read + Edit |
 | DNS & Zones | Zone Settings | Read + Edit |
 
-> 💡 最小可用集只需：账户级 `Cloudflare Tunnel → Edit` + 区域级 `DNS → Read/Edit`、`Zone → Read`；多勾的项是无害冗余。常见错误是只配了账户级的 Account DNS Settings / DNS View（管的是账户 DNS 全局设置，不是 Zone 里的 DNS 记录），会导致"该域名已存在 DNS 记录"或删除隧道后 DNS 清理失败——**区域级的 `DNS → Edit` 必须有**。
+> 💡 最小可用集只需：账户级 `Cloudflare Tunnel → Edit` + 区域级 `DNS → Read/Edit`、`Zone → Read`；多勾的项是无害冗余。常见错误是只配了账户级的 Account DNS Settings / DNS View（管的是账户 DNS 全局设置，不是 Zone 里的 DNS 记录），会导致"该域名已存在 DNS 记录"或删除隧道后 DNS 清理失败——**区域级的 `DNS → Edit` 必须有**。要用 **R2 存储桶管理**，还需账户级 `Workers R2 Storage → Read + Edit`，否则打开 R2 页会提示"API 令牌缺少 R2 权限"。
 
 ## 💾 存储选择：D1（推荐）或 KV
 
@@ -184,6 +186,10 @@ KV 有每日写入次数限制且存在最终一致延迟（写后立刻读可�
 | `/api/alert` | 隧道提醒开关 (toggle) / 吞掉一次变化 (skip) |
 | `/api/tg` | Telegram 配置：保存、测试、增删接收者、暂停/恢复 |
 | `/api/acc` | 多账号：列表 (list) / 添加 (add，先验证) / 编辑 (edit) / 删除 (del) / 切换 (switch) |
+| `/api/r2/buckets` `/api/r2/objects` | 列存储桶 / 列某目录下的文件夹与文件（支持翻页） |
+| `/api/r2/upload` `/api/r2/put` `/api/r2/get` | 多文件上传 / 新建·保存文本文件 / 取回文本文件内容供编辑 |
+| `/api/r2/mkdir` `/api/r2/delete` | 新建文件夹 / 删除文件或文件夹（可多选） |
+| `GET /s/<账号ID>/<桶>/<文件>` | 免登录共享下载链接（支持 Range 断点续传） |
 
 ## ❓ 常见问题
 
@@ -192,6 +198,7 @@ KV 有每日写入次数限制且存在最终一致延迟（写后立刻读可�
 - **"机器人 Token 无效"**：检查 Bot Token 是否复制完整、机器人是否被 BotFather 停用。
 - **"隧道仍有活跃连接，请先停止 cloudflared"**：删除前先在目标机器上停止 `cloudflared` 进程（Cloudflare 平台限制）。
 - **"该域名已存在其他 DNS 记录"**：先到 Zone 的 DNS 页面删除冲突记录，或换个子域名。
+- **"API 令牌缺少 R2 权限"**：给 API Token 加上账户级 `Workers R2 Storage → Read + Edit`（见[权限配置](#-api-token-权限配置)），多账号时每个账号的 Token 都要加。
 - **"DNS 记录清理失败"（删除隧道/路由后提示）**：检查 API Token 是否有**区域级 Zone → DNS → Edit** 权限（见[权限配置](#-api-token-权限配置)），账户级的 Account DNS Settings 不能替代它；toast 里会显示具体原因。
 - **改密码后所有人掉线**：未设置 `SESSION_SECRET` 时会话密钥由密码派生；设置独立的 `SESSION_SECRET` 可避免。
 - **旧版本"默认开提醒"想全部关**：新版已改为默认关并带一次性迁移，打开面板后旧数据自动清成关闭状态。
@@ -199,6 +206,7 @@ KV 有每日写入次数限制且存在最终一致延迟（写后立刻读可�
 ## 🔒 安全说明
 
 - 所有 Cloudflare API 调用都在 Worker 服务端完成，Token 不会下发到浏览器。
+- R2 共享下载链接（`/s/...`）不需要登录，链接本身即凭证，任何人打开都可直接下载，请勿分享敏感文件。
 - 隧道启动 Token（可冒充隧道接管流量）仅在登录后按需单独获取。
 - 登录密码比较使用固定时间算法，防止时序侧信道；连续失败有延时惩罚。
 - 建议同时设置 `SESSION_SECRET`，并给 Worker 域名加上 Cloudflare Access 作为第二层防护（可选）。

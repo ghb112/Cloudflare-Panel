@@ -3,7 +3,7 @@
 //   CF_ACCOUNT_ID    账户 ID，创建token时显示
 //   CF_API_TOKEN     API 令牌, 权限: 
 //        整个账户：DNS & Zone → Account DNS Settings → Read & Edit；DNS View → Read & Edit;
-//                 Argo Tunnel → Read & Edit；
+//                 Argo Tunnel → Read & Edit；Workers R2 Storage → Read & Edit (R2 存储桶管理需要)；
 //        所有域名：DNS & Zone → DNS → Read & Edit;Zone → Read & Edit;Zone DNS Settings → Read & Edit;Zone Settings → Read & Edit;
 
 //   PASSWORD         登录密码 (必填), 至少 6 位
@@ -60,6 +60,10 @@ const ZH_ERRORS = [
   [/rate limit|too many requests/i, "请求过于频繁,请稍后再试"],
   [/active connections|cannot delete tunnel/i, "隧道仍有活跃连接,请先停止 cloudflared 再删除"],
   [/tunnel.*not found/i, "隧道不存在或已被删除"],
+  [/r2.*(permission|not authorized|forbidden)|requires.*r2 storage|user does not have.*r2/i,
+    "API 令牌缺少 R2 权限, 请给 Token 加上: 帐户 → Workers R2 Storage → Read & Edit"],
+  [/bucket not found|no such bucket/i, "存储桶不存在"],
+  [/object not found|no such key/i, "文件不存在"],
 ];
 
 function zhError(errors) {
@@ -92,6 +96,59 @@ async function cf(env, path, method = "GET", body) {
   }
   if (!j.success) throw new Error(zhError(j.errors));
   return j.result;
+}
+
+// ---- R2 存储桶管理: 直接调 Cloudflare API v4 (与 Tunnel 共用同一 Token, 需 Workers R2 Storage 读写权限) ----
+// 对象键按段编码: 保留 / 作为路径分隔, 其余字符编码 (空格、中文、# ? 等)
+const r2KeyPath = (key) => String(key).split("/").map(encodeURIComponent).join("/");
+// 对象键校验: 不允许空段、..、前导 / (文件夹占位键以单个 / 结尾是合法的, 校验时先去掉它)
+function validR2Key(key) {
+  if (!key || key.startsWith("/")) return false;
+  const k = key.endsWith("/") ? key.slice(0, -1) : key;
+  if (!k) return false;
+  return !k.split("/").some((s) => s === "" || s === "." || s === "..");
+}
+function contentTypeFor(key) {
+  const ext = String(key).split(".").pop().toLowerCase();
+  const m = {
+    txt: "text/plain", md: "text/markdown", json: "application/json", html: "text/html", htm: "text/html",
+    css: "text/css", js: "text/javascript", mjs: "text/javascript", xml: "text/xml", csv: "text/csv",
+    svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+    webp: "image/webp", pdf: "application/pdf",
+  }[ext];
+  if (!m) return "application/octet-stream";
+  return m.startsWith("text/") || m === "application/json" ? m + "; charset=utf-8" : m;
+}
+// 原始请求 (对象读写返回二进制, 不走 JSON 信封解析); HTTP 失败时按信封解析出中文报错
+async function r2Raw(env, path, method = "GET", body, headers) {
+  const token = env.cfToken || env.CF_API_TOKEN;
+  const r = await fetch(API + path, {
+    method,
+    headers: { Authorization: "Bearer " + token, ...(headers || {}) },
+    body: body === undefined ? undefined : body,
+  });
+  if (!r.ok) {
+    let msg = "R2 请求失败 (HTTP " + r.status + ")";
+    try {
+      const j = await r.json();
+      if (j && j.errors) msg = zhError(j.errors);
+    } catch (e) {}
+    throw new Error(msg);
+  }
+  return r;
+}
+// 上传/写入一个对象 (body: ArrayBuffer/Uint8Array); 成功返回 true, 失败抛错
+async function r2PutObject(env, acc, bucket, key, body, contentType) {
+  const r = await r2Raw(env,
+    `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects/${r2KeyPath(key)}`,
+    "PUT", body, { "Content-Type": contentType || "application/octet-stream" });
+  try {
+    const j = await r.json();
+    if (j && j.success === false) throw new Error(zhError(j.errors));
+  } catch (e) {
+    if (e instanceof Error && /Cloudflare/.test(e.message)) throw e; // 明确的接口报错才抛, 否则按成功处理
+  }
+  return true;
 }
 
 function b64(bytes) {
@@ -653,10 +710,19 @@ const setCookie = (value, maxAge) =>
 
 // ---- API ----
 async function handleApi(request, env, path) {
-  const d = await request.json().catch(() => ({}));
+  // R2 上传用 multipart/form-data: 此时不解析 JSON (body 只能读一次), 改由上传接口读 formData
+  const isForm = (request.headers.get("content-type") || "").includes("multipart/form-data");
+  let fd = null;
+  if (isForm) {
+    try { fd = await request.formData(); } catch (e) {}
+  }
+  const d = isForm ? {} : await request.json().catch(() => ({}));
   const uuid = (v) => UUID_RE.test(str(v));
   // 前端在所有请求里带 acc (当前所选账号); 32 位 hex 才作为有效选择
-  if (/^[0-9a-f]{32}$/i.test(str(d.acc))) env.cfAcc = str(d.acc).toLowerCase();
+  if (isForm && fd) {
+    const a = str(fd.get("acc"));
+    if (/^[0-9a-f]{32}$/i.test(a)) env.cfAcc = a.toLowerCase();
+  } else if (/^[0-9a-f]{32}$/i.test(str(d.acc))) env.cfAcc = str(d.acc).toLowerCase();
 
   // 登录 / 退出 (不需要已登录)
   if (path === "/api/login") {
@@ -1149,7 +1215,171 @@ async function handleApi(request, env, path) {
     return json({ ok: true, ...clean });
   }
 
+  // ---- R2 存储桶管理 (与 Tunnel 接口共用同一 API Token, 需 Workers R2 Storage 读写权限) ----
+  if (path === "/api/r2/buckets") {
+    // 列出当前账号下全部存储桶 (分页拉满, 最多约 1000 个)
+    let buckets = [], cursor = "";
+    for (let i = 0; i < 10; i++) {
+      const r = await cf(env, `/accounts/${acc}/r2/buckets?per_page=1000` + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""));
+      const list = Array.isArray(r) ? r : (r.buckets || []);
+      buckets.push(...list);
+      cursor = (r && r.cursor) || "";
+      if (!cursor) break;
+    }
+    return json({ buckets: buckets.map((b) => ({ name: b.name, creation_date: b.creation_date || "", location: b.location || "" })) });
+  }
+
+  if (path === "/api/r2/objects") {
+    // 列出某存储桶某前缀下的一层: 文件夹 (delimitedPrefixes) + 文件 (objects), 支持翻页
+    const bucket = str(d.bucket);
+    if (!bucket) return json({ error: "请选择存储桶" }, 400);
+    const prefix = String(d.prefix || "");
+    const cursor = str(d.cursor);
+    const q = `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(prefix)}&delimiter=%2F&limit=1000`
+      + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+    const r = await cf(env, q);
+    const res = r || {};
+    const rawObjs = Array.isArray(res) ? res : (res.objects || []);
+    // 以 / 结尾的 0 字节对象是"新建文件夹"留下的占位, 不当文件展示 (文件夹由 delimitedPrefixes 展示)
+    const objects = rawObjs.filter((o) => o && o.key && !(String(o.key).endsWith("/") && !o.size));
+    const folders = (res.delimitedPrefixes || res.delimited_prefixes || []).map((p) => String(p));
+    return json({
+      bucket, prefix,
+      objects: objects.map((o) => ({ key: o.key, name: String(o.key).slice(prefix.length), size: o.size || 0, uploaded: o.uploaded || "", etag: o.etag || "" })),
+      folders: folders.map((p) => ({ prefix: p, name: p.slice(prefix.length).replace(/\/$/, "") })),
+      truncated: !!res.truncated, cursor: res.cursor || "",
+    });
+  }
+
+  if (path === "/api/r2/upload") {
+    // 多文件上传 (multipart/form-data: acc/bucket/prefix + files[], 文件选择框里按住 Ctrl 可多选)
+    if (!fd) return json({ error: "未收到上传文件" }, 400);
+    const bucket = str(fd.get("bucket"));
+    const prefix = String(fd.get("prefix") || "");
+    if (!bucket) return json({ error: "请选择存储桶" }, 400);
+    const files = fd.getAll("files").filter((f) => f && typeof f.name === "string" && f.name);
+    if (!files.length) return json({ error: "请选择要上传的文件" }, 400);
+    const uploaded = [], failed = [];
+    for (const f of files) {
+      const key = prefix + f.name;
+      try {
+        if (!validR2Key(key)) throw new Error("文件名不合法: " + f.name);
+        await r2PutObject(env, acc, bucket, key, await f.arrayBuffer(), f.type || contentTypeFor(f.name));
+        uploaded.push(f.name);
+      } catch (e) { failed.push({ name: f.name, error: String((e && e.message) || e) }); }
+    }
+    return json({ ok: true, uploaded, failed });
+  }
+
+  if (path === "/api/r2/put") {
+    // 新建 / 编辑文本文件 (保存编辑器内容)
+    const bucket = str(d.bucket), key = String(d.key || "");
+    const content = d.content == null ? "" : String(d.content);
+    if (!bucket || !key) return json({ error: "请填写文件名" }, 400);
+    if (!validR2Key(key)) return json({ error: "文件名不合法 (不能含 .. 或以 / 开头)" }, 400);
+    await r2PutObject(env, acc, bucket, key, new TextEncoder().encode(content), contentTypeFor(key));
+    return json({ ok: true, key });
+  }
+
+  if (path === "/api/r2/get") {
+    // 取回一个文本文件的内容供编辑 (仅限 2MB 以内、合法 UTF-8 文本; 二进制文件请下载)
+    const bucket = str(d.bucket), key = String(d.key || "");
+    if (!bucket || !key) return json({ error: "参数不完整" }, 400);
+    const r = await r2Raw(env, `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects/${r2KeyPath(key)}`);
+    const len = Number(r.headers.get("content-length") || 0);
+    if (len > 2 * 1024 * 1024) return json({ error: "文件超过 2MB, 请下载后本地编辑" }, 400);
+    const buf = await r.arrayBuffer();
+    if (buf.byteLength > 2 * 1024 * 1024) return json({ error: "文件超过 2MB, 请下载后本地编辑" }, 400);
+    let text;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(buf);
+    } catch (e) {
+      return json({ error: "该文件不是文本文件, 无法在线编辑 (请下载后本地编辑)" }, 400);
+    }
+    return json({ ok: true, content: text, size: buf.byteLength });
+  }
+
+  if (path === "/api/r2/mkdir") {
+    // 新建文件夹: R2 没有真文件夹, 写入一个以 / 结尾的 0 字节占位对象 (名称可含 / 建多级)
+    const bucket = str(d.bucket), prefix = String(d.prefix || "");
+    const name = str(d.name).replace(/^\/+|\/+$/g, "");
+    if (!bucket || !name) return json({ error: "请填写文件夹名" }, 400);
+    if (!validR2Key(prefix + name + "/")) return json({ error: "文件夹名不合法 (不能含 .. 或空段)" }, 400);
+    await r2PutObject(env, acc, bucket, prefix + name + "/", new Uint8Array(0), "application/octet-stream");
+    return json({ ok: true, prefix: prefix + name + "/" });
+  }
+
+  if (path === "/api/r2/delete") {
+    // 删除文件 (keys[]) 和文件夹 (prefixes[]: 删除该前缀下全部对象, 最多 5000 个)
+    const bucket = str(d.bucket);
+    const keys = Array.isArray(d.keys) ? d.keys.map((k) => String(k)).filter(Boolean) : [];
+    const prefixes = Array.isArray(d.prefixes) ? d.prefixes.map((p) => String(p)).filter(Boolean) : [];
+    if (!bucket || (!keys.length && !prefixes.length)) return json({ error: "请选择要删除的文件或文件夹" }, 400);
+    const all = [...keys];
+    for (const p of prefixes) {
+      let cursor = "";
+      for (let i = 0; i < 10 && all.length < 5000; i++) {
+        const r = await cf(env, `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(p)}&limit=1000`
+          + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""));
+        const objs = Array.isArray(r) ? r : (r.objects || []);
+        for (const o of objs) if (o && o.key) all.push(o.key);
+        cursor = (r && r.cursor) || "";
+        if (!(r && r.truncated) || !cursor) break;
+      }
+    }
+    let deleted = 0;
+    const failed = [];
+    for (const key of [...new Set(all)]) {
+      try {
+        await r2Raw(env, `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects/${r2KeyPath(key)}`, "DELETE");
+        deleted++;
+      } catch (e) { failed.push({ key, error: String((e && e.message) || e) }); }
+    }
+    return json({ ok: true, deleted, failed });
+  }
+
   return json({ error: "未知接口" }, 404);
+}
+
+// ---- R2 共享下载链接 (免登录): GET /s/<32位账号ID>/<存储桶>/<对象键...> ----
+// 链接本身即凭证, 任何人打开都可直接下载; 请勿分享敏感文件。支持 Range 断点续传。
+async function r2Share(request, env, path) {
+  const parts = path.slice(3).split("/").map((s) => {
+    try { return decodeURIComponent(s); } catch (e) { return ""; }
+  });
+  const accId = parts[0] || "", bucket = parts[1] || "", key = parts.slice(2).join("/");
+  if (!/^[0-9a-f]{32}$/i.test(accId) || !bucket || !key)
+    return new Response("链接无效", { status: 400 });
+  const meta = store(env) ? await getMeta(env) : { accounts: [] };
+  const actx = pickAccount(meta, env, accId.toLowerCase());
+  if (!actx) return new Response("账号不存在", { status: 404 });
+  env.cfToken = actx.token || env.CF_API_TOKEN;
+  const headers = {};
+  const range = request.headers.get("range");
+  if (range) headers.Range = range;
+  let r;
+  try {
+    r = await r2Raw(env,
+      `/accounts/${actx.acc}/r2/buckets/${encodeURIComponent(bucket)}/objects/${r2KeyPath(key)}`,
+      request.method, undefined, headers);
+  } catch (e) {
+    return new Response("文件不存在或无权访问", { status: 404 });
+  }
+  const name = key.split("/").pop() || "download";
+  const out = new Headers();
+  const ct = r.headers.get("content-type");
+  out.set("Content-Type", ct && ct !== "application/json" ? ct : contentTypeFor(key));
+  const len = r.headers.get("content-length");
+  if (len) out.set("Content-Length", len);
+  const cr = r.headers.get("content-range");
+  if (cr) out.set("Content-Range", cr);
+  const et = r.headers.get("etag");
+  if (et) out.set("ETag", et);
+  out.set("Accept-Ranges", "bytes");
+  out.set("Cache-Control", "no-store");
+  out.set("Content-Disposition",
+    `attachment; filename="${encodeURIComponent(name).replace(/%20/g, " ")}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  return new Response(r.body, { status: r.status, headers: out });
 }
 
 export default {
@@ -1186,6 +1416,9 @@ export default {
 
     if (request.method !== "GET" && request.method !== "HEAD")
       return new Response("Method Not Allowed", { status: 405 });
+
+    // R2 共享下载链接 (免登录, 见 r2Share)
+    if (path.startsWith("/s/")) return await r2Share(request, env, path);
 
     const loggedIn = await checkSession(env, cookieValue(request, COOKIE));
     const pwa = pwaResponse(path);
@@ -1602,6 +1835,34 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
   .amrow > div{flex:none !important;width:100%}
   .amhint{display:block;margin-top:2px}
   .toolbar{gap:8px}
+
+  /* ---- R2 存储桶 ---- */
+  .r2crumbs{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:14px;margin:0 0 12px}
+  .r2crumbs button{background:none;border:0;color:var(--brand);cursor:pointer;font-size:14px;font-weight:700;padding:2px 4px}
+  .r2crumbs button:hover{text-decoration:underline}
+  .r2crumbs .sep{color:var(--sub)}
+  .r2grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+  .r2bk{cursor:pointer}
+  .r2bk:hover{border-color:var(--brand)}
+  .r2bk .bn{font-weight:700;font-size:15px;word-break:break-all}
+  .r2bk .bm{font-size:12px;color:var(--sub);margin-top:6px}
+  .frow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;cursor:pointer}
+  .frow:hover{background:var(--side2)}
+  .frow.sel{background:rgba(246,130,31,.13)}
+  .frow .fi{flex:none;width:20px;text-align:center;font-size:16px}
+  .frow .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+  .frow .fm{flex:none;font-size:12px;color:var(--sub);white-space:nowrap}
+  .frow input[type=checkbox]{flex:none;width:16px;height:16px;accent-color:#f6821f;cursor:pointer}
+  .r2selbar{display:none;align-items:center;gap:10px;margin:0 0 12px;padding:9px 12px;border-radius:12px;background:rgba(246,130,31,.12);border:1px solid rgba(246,130,31,.35);font-size:13.5px}
+  .r2selbar.show{display:flex}
+  .ctxmenu{position:fixed;z-index:200;min-width:190px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:5px;box-shadow:0 14px 40px rgba(0,0,0,.45);display:none}
+  .ctxmenu.show{display:block}
+  .ctxmenu button{display:flex;width:100%;align-items:center;gap:9px;padding:9px 11px;border:0;background:none;color:var(--text);font-size:13.5px;cursor:pointer;border-radius:8px;text-align:left}
+  .ctxmenu button:hover{background:var(--side2)}
+  .ctxmenu button.danger{color:var(--bad)}
+  .ctxmenu .csep{height:1px;background:var(--line);margin:4px 6px}
+  .r2edit{width:100%;min-height:300px;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.6;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--in);color:var(--text);outline:none}
+  .r2edit:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(246,130,31,.18)}
 }
 </style></head><body>
 <div class="app">
@@ -1610,6 +1871,7 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
     <nav class="nav">
       <a data-v="dash" class="on"><span class="i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg></span>仪表板</a>
       <a data-v="tunnels"><span class="i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19a4.5 4.5 0 1 0-.42-8.98 6 6 0 1 0-11.06 3.1A3.5 3.5 0 0 0 6.5 19Z"/><path d="M9 12v4"/><path d="m9 12 6-3"/><circle cx="15" cy="9" r=".8" fill="currentColor" stroke="none"/></svg></span>Tunnel 管理</a>
+      <a data-v="r2"><span class="i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/><path d="M4 11.5v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg></span>R2 存储桶</a>
       <a data-v="tg"><span class="i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></span>Telegram 配置</a>
     </nav>
     <div class="foot"><a href="#" id="logout"><span class="i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M5 21c0-3.9 3.1-7 7-7s7 3.1 7 7"/></svg></span><span class="lt">退出登录</span><span class="lo">⇥</span></a></div>
@@ -1669,6 +1931,28 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
           <h3><span>隧道列表</span><span class="hint" id="sum" style="margin:0"></span></h3>
           <div id="list"><div class="empty">加载中...</div></div>
         </div>
+      </section>
+
+      <section class="view" id="v-r2">
+        <div class="toolbar">
+          <div class="search">
+            <span class="si"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span>
+            <input id="r2q" placeholder="筛选当前页文件 / 文件夹" autocomplete="off">
+            <button class="qx" id="r2qclear" type="button" title="清空筛选">✕</button>
+          </div>
+          <button class="btn" id="r2upload"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 16V4M6 10l6-6 6 6"/><path d="M4 20h16"/></svg>上传文件</button>
+          <button class="btn gray" id="r2newfile">新建文件</button>
+          <button class="btn gray" id="r2newdir">新建文件夹</button>
+          <input type="file" id="r2file" multiple hidden>
+        </div>
+        <div class="card">
+          <h3><span id="r2title">存储桶</span><span class="hint" id="r2sum" style="margin:0"></span></h3>
+          <div class="r2crumbs" id="r2crumbs" style="display:none"></div>
+          <div class="r2selbar" id="r2selbar"><span id="r2selct"></span><button class="btn sm red" id="r2delSel">删除选中</button><button class="btn sm gray" id="r2clearSel">取消选择</button></div>
+          <div id="r2list"><div class="empty">加载中...</div></div>
+          <div style="text-align:center;margin-top:12px"><button class="btn gray" id="r2more" style="display:none">加载更多</button></div>
+        </div>
+        <div class="hint" style="margin-top:10px">右键点击文件 / 文件夹或空白处可调出操作菜单 (手机上点每行右侧的 ⋯ 按钮)；上传时在文件选择框里按住 Ctrl 可多选；删除时勾选复选框可多选。共享链接任何人打开都可直接下载，请勿分享敏感文件。</div>
       </section>
 
       <section class="view" id="v-tg">
@@ -1804,6 +2088,22 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
   </div>
 </div>
 
+<div class="modal" id="mR2Create">
+  <h3><span id="r2c_ttl">新建文件</span><button class="x" id="r2c_x">✕</button></h3>
+  <label>名称</label>
+  <input id="r2c_name" placeholder="例如 notes/hello.txt (可含 / 建子目录)" autocapitalize="off" autocomplete="off" spellcheck="false">
+  <div id="r2c_body_wrap"><label>内容 (可留空)</label><textarea id="r2c_body" class="r2edit" style="min-height:180px" placeholder="文件内容..." spellcheck="false"></textarea></div>
+  <div class="btns"><button class="btn gray" id="r2c_cancel">取消</button><button class="btn" id="r2c_save">创建</button></div>
+</div>
+
+<div class="modal" id="mR2Edit">
+  <h3><span>编辑文件 · <span id="r2e_name" style="font-weight:400"></span></span><button class="x" id="r2e_x">✕</button></h3>
+  <textarea id="r2e_body" class="r2edit" spellcheck="false"></textarea>
+  <div class="btns"><button class="btn gray" id="r2e_cancel">取消</button><button class="btn" id="r2e_save">保存</button></div>
+</div>
+
+<div class="ctxmenu" id="r2menu"></div>
+
 <script>
 var $=function(i){return document.getElementById(i)};
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
@@ -1931,7 +2231,9 @@ $('acc_sel').addEventListener('change',async function(){
     try{await api('/api/acc',{action:'switch',acc:v})}catch(e){}
     curAcc=v;renderAccSel({accounts:Object.keys(accNames).map(function(k){return {name:accNames[k],acc:k}}),cur:v});
     metaCache={}; // 新账号路由缓存清空
+    r2Reset(); // R2 状态清空 (存储桶随账号变化)
     await Promise.all([loadList(),initZones()]); // 列表 + 域名下拉都随账号刷新
+    if(curView==='r2')loadR2Buckets();
   }finally{setBusy(false)}
   loadTg();
   loadMeta();
@@ -2021,7 +2323,7 @@ document.addEventListener('click',async function(e){
         try{await api('/api/acc',{action:'switch',acc:curAcc})}catch(e2){}
         renderAccSel({accounts:items,cur:curAcc});
         setBusy(true,'账号切换中...');
-        try{metaCache={};await Promise.all([loadList(),initZones()])}finally{setBusy(false)}
+        try{metaCache={};r2Reset();await Promise.all([loadList(),initZones()])}finally{setBusy(false)}
         loadTg();loadMeta();
       }
     }else{
@@ -2039,9 +2341,10 @@ function show(v){
   curView=v;
   document.querySelectorAll('.nav a').forEach(function(a){a.className=a.dataset.v===v?'on':''});
   document.querySelectorAll('.view').forEach(function(s){s.className='view'+(s.id==='v-'+v?' on':'')});
-  $('ttl').textContent=({dash:'仪表板',tunnels:'Tunnel 管理',tg:'Telegram 配置'})[v]||'';
+  $('ttl').textContent=({dash:'仪表板',tunnels:'Tunnel 管理',r2:'R2 存储桶',tg:'Telegram 配置'})[v]||'';
   $('sidenav').className='sidenav';
   applyFit();
+  if(v==='r2'&&!r2Bucket)loadR2Buckets(); // 首次进入 R2 页拉存储桶列表 (已在桶内时保持当前目录)
 }
 window.addEventListener('resize',applyFit);
 document.querySelectorAll('.nav a').forEach(function(a){a.onclick=function(){show(a.dataset.v)}});
@@ -2176,7 +2479,11 @@ $('qclear').onclick=function(){
 $('refresh').onclick=async function(){
   var b=$('refresh');if(b.disabled)return;
   b.disabled=true;b.innerHTML='<span class="spin"></span> 刷新中';
-  try{await loadList();await loadMeta();toast('列表已刷新')}catch(e){}
+  try{
+    if(curView==='r2'){if(r2Bucket)await loadR2Objects(false);else await loadR2Buckets();}
+    else{await loadList();await loadMeta();}
+    toast('列表已刷新')
+  }catch(e){}
   b.disabled=false;b.innerHTML='刷新';
 };
 async function loadList(){
@@ -2550,6 +2857,260 @@ $('theme').onclick=toggleTheme;
 var savedTheme='';
 try{savedTheme=localStorage.getItem('theme')||''}catch(e){}
 applyTheme(savedTheme);
+
+/* ---- R2 存储桶 ---- */
+var r2Bucket='', r2Prefix='', r2Cursor='', r2Truncated=false;
+var r2Objects=[], r2Folders=[], r2Sel={}; // r2Sel: {'file:<key>':true, 'dir:<prefix>':true}
+function r2Reset(){r2Bucket='';r2Prefix='';r2Cursor='';r2Truncated=false;r2Objects=[];r2Folders=[];r2Sel={};}
+function fmtSize(n){n=+n||0;if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';if(n<1073741824)return (n/1048576).toFixed(1)+' MB';return (n/1073741824).toFixed(2)+' GB';}
+function fmtTime(s){if(!s)return '';var d=new Date(s);if(isNaN(d))return String(s);var z=function(n){return String(n).length<2?'0'+n:n};return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())+' '+z(d.getHours())+':'+z(d.getMinutes());}
+function r2ShareUrl(bucket,key){return location.origin+'/s/'+curAcc+'/'+bucket+'/'+String(key).split('/').map(encodeURIComponent).join('/');}
+function r2SelCount(){return Object.keys(r2Sel).length;}
+function r2UpdateSelBar(){var n=r2SelCount();$('r2selbar').className=n?'r2selbar show':'r2selbar';$('r2selct').textContent='已选 '+n+' 项';}
+function r2FileIcon(name){
+  var ext=String(name).split('.').pop().toLowerCase();
+  if(['png','jpg','jpeg','gif','webp','svg','bmp','ico'].indexOf(ext)>=0)return '🖼️';
+  if(['mp4','mov','webm','mkv'].indexOf(ext)>=0)return '🎬';
+  if(['mp3','wav','flac','ogg'].indexOf(ext)>=0)return '🎵';
+  if(['zip','rar','7z','tar','gz'].indexOf(ext)>=0)return '📦';
+  if(ext==='pdf')return '📕';
+  return '📄';
+}
+async function loadR2Buckets(){
+  var box=$('r2list');
+  box.innerHTML='<div class="empty">加载中...</div>';
+  $('r2crumbs').style.display='none';$('r2title').textContent='存储桶';$('r2sum').textContent='';
+  $('r2more').style.display='none';r2UpdateSelBar();
+  try{
+    var d=await api('/api/r2/buckets');
+    var bs=d.buckets||[];
+    if(!bs.length){box.innerHTML='<div class="empty">当前账号下暂无存储桶<br><span style="font-size:11.5px">请先到 Cloudflare 控制台 R2 里创建一个存储桶</span></div>';return}
+    $('r2sum').textContent='共 '+bs.length+' 个';
+    box.innerHTML='<div class="r2grid">'+bs.map(function(b){
+      return '<div class="card r2bk" data-r2bk="'+esc(b.name)+'" style="margin-bottom:0"><div class="bn">🪣 '+esc(b.name)+'</div><div class="bm">创建于 '+esc(fmtTime(b.creation_date)||'-')+(b.location?' · '+esc(b.location):'')+'</div></div>';
+    }).join('')+'</div>';
+  }catch(e){box.innerHTML='<div class="empty">加载失败</div>';fail(e)}
+}
+function r2Crumbs(){
+  var c=$('r2crumbs');
+  if(!r2Bucket){c.style.display='none';return}
+  c.style.display='';
+  var segs=r2Prefix.split('/').filter(Boolean);
+  var html='<button data-crumb="">🪣 '+esc(r2Bucket)+'</button>';
+  var acc='';
+  segs.forEach(function(s){acc+=s+'/';html+='<span class="sep">/</span><button data-crumb="'+esc(acc)+'">'+esc(s)+'</button>'});
+  c.innerHTML=html;
+}
+async function loadR2Objects(append){
+  var box=$('r2list');
+  if(!append){box.innerHTML='<div class="empty">加载中...</div>';r2Objects=[];r2Folders=[];r2Cursor='';r2Truncated=false;}
+  r2Crumbs();$('r2title').textContent=r2Bucket;$('r2more').style.display='none';
+  try{
+    var d=await api('/api/r2/objects',{bucket:r2Bucket,prefix:r2Prefix,cursor:append?r2Cursor:''});
+    if(append){r2Objects=r2Objects.concat(d.objects||[]);r2Folders=r2Folders.concat(d.folders||[]);}
+    else{r2Objects=d.objects||[];r2Folders=d.folders||[];}
+    r2Truncated=!!d.truncated;r2Cursor=d.cursor||'';
+    renderR2List();
+  }catch(e){if(!append)box.innerHTML='<div class="empty">加载失败</div>';fail(e)}
+}
+function renderR2List(){
+  var box=$('r2list');
+  var q=$('r2q').value.trim().toLowerCase();
+  var folders=r2Folders.filter(function(f){return !q||f.name.toLowerCase().indexOf(q)>=0});
+  var objs=r2Objects.filter(function(o){return !q||o.name.toLowerCase().indexOf(q)>=0});
+  $('r2sum').textContent=(r2Folders.length+r2Objects.length)+' 项'+(r2Truncated?' (还有更多, 点下方加载更多)':'');
+  $('r2more').style.display=r2Truncated?'':'none';
+  if(!folders.length&&!objs.length){box.innerHTML='<div class="empty">当前目录为空，右键空白处可上传 / 新建</div>';return}
+  var h='';
+  folders.forEach(function(f){
+    h+='<div class="frow" data-kind="dir" data-key="'+esc(f.prefix)+'"><input type="checkbox" data-sel="dir:'+esc(f.prefix)+'"'+(r2Sel['dir:'+f.prefix]?' checked':'')+'><span class="fi">📁</span><span class="fn">'+esc(f.name)+'</span><span class="fm">文件夹</span><button class="btn sm gray" data-r2menu="dir" data-key="'+esc(f.prefix)+'">⋯</button></div>';
+  });
+  objs.forEach(function(o){
+    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+r2FileIcon(o.name)+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2menu="file" data-key="'+esc(o.key)+'">⋯</button></div>';
+  });
+  box.innerHTML=h;
+  r2UpdateSelBar();
+}
+function r2EnterBucket(b){r2Bucket=b;r2Prefix='';r2Sel={};loadR2Objects(false);}
+function r2EnterDir(prefix){r2Prefix=prefix;r2Sel={};loadR2Objects(false);}
+function r2Download(key){window.open(r2ShareUrl(r2Bucket,key),'_blank');}
+/* ---- 右键菜单 ---- */
+var r2MenuCtx=null; // {kind:'file'|'dir'|'blank', key}
+function r2HideMenu(){$('r2menu').className='ctxmenu';r2MenuCtx=null;}
+function r2ShowMenu(x,y,html,ctx){
+  var m=$('r2menu');
+  m.innerHTML=html;r2MenuCtx=ctx;
+  m.className='ctxmenu show';
+  var w=m.offsetWidth,h=m.offsetHeight;
+  m.style.left=Math.max(4,Math.min(x,window.innerWidth-w-8))+'px';
+  m.style.top=Math.max(4,Math.min(y,window.innerHeight-h-8))+'px';
+}
+function r2MenuFor(kind){
+  if(kind==='file')
+    return '<button data-m="dl">⬇️ 下载</button>'+
+      '<button data-m="share">🔗 复制共享链接</button>'+
+      '<button data-m="edit">✏️ 编辑</button>'+
+      '<div class="csep"></div>'+
+      '<button data-m="del" class="danger">🗑 删除</button>';
+  if(kind==='dir')
+    return '<button data-m="open">📂 打开</button>'+
+      '<div class="csep"></div>'+
+      '<button data-m="del" class="danger">🗑 删除文件夹</button>';
+  return '<button data-m="upload">⬆️ 上传文件</button>'+
+    '<button data-m="newfile">📄 新建文件</button>'+
+    '<button data-m="newdir">📁 新建文件夹</button>'+
+    '<div class="csep"></div>'+
+    '<button data-m="refresh">🔄 刷新</button>';
+}
+async function r2MenuAction(m){
+  var ctx=r2MenuCtx;r2HideMenu();if(!ctx)return;
+  if(m==='dl'&&ctx.kind==='file')r2Download(ctx.key);
+  else if(m==='share'&&ctx.kind==='file'){copy(r2ShareUrl(r2Bucket,ctx.key));toast('共享链接已复制, 任何人打开都可直接下载');}
+  else if(m==='edit'&&ctx.kind==='file')r2OpenEdit(ctx.key);
+  else if(m==='del')r2Delete(ctx.kind==='dir'?{prefixes:[ctx.key]}:{keys:[ctx.key]});
+  else if(m==='open'&&ctx.kind==='dir')r2EnterDir(ctx.key);
+  else if(m==='upload')$('r2file').click();
+  else if(m==='newfile')r2OpenCreate('file');
+  else if(m==='newdir')r2OpenCreate('dir');
+  else if(m==='refresh')loadR2Objects(false);
+}
+$('r2list').addEventListener('contextmenu',function(e){
+  e.preventDefault();
+  if(!r2Bucket)return; // 存储桶列表页不弹菜单
+  var row=e.target.closest('.frow');
+  if(row)r2ShowMenu(e.clientX,e.clientY,r2MenuFor(row.dataset.kind),{kind:row.dataset.kind,key:row.dataset.key});
+  else r2ShowMenu(e.clientX,e.clientY,r2MenuFor('blank'),{kind:'blank'});
+});
+document.addEventListener('click',function(e){
+  if(!e.target.closest('#r2menu'))r2HideMenu();
+  var t=e.target.closest('[data-r2menu]');
+  if(t){e.stopPropagation();var r=t.getBoundingClientRect();r2ShowMenu(r.left,r.bottom+4,r2MenuFor(t.dataset.r2menu),{kind:t.dataset.r2menu,key:t.dataset.key});return}
+  var m=e.target.closest('#r2menu [data-m]');
+  if(m){r2MenuAction(m.dataset.m);return}
+  var bk=e.target.closest('[data-r2bk]');
+  if(bk){r2EnterBucket(bk.dataset.r2bk);return}
+  var cb=e.target.closest('[data-crumb]');
+  if(cb){r2Prefix=cb.dataset.crumb;r2Sel={};loadR2Objects(false);return}
+  var row=e.target.closest('.frow');
+  if(row&&!e.target.closest('input[type=checkbox]')&&!e.target.closest('button')){
+    if(row.dataset.kind==='dir')r2EnterDir(row.dataset.key);
+    else r2Download(row.dataset.key);
+    return;
+  }
+});
+document.addEventListener('change',function(e){
+  var c=e.target.closest('[data-sel]');
+  if(!c)return;
+  if(c.checked)r2Sel[c.dataset.sel]=true;else delete r2Sel[c.dataset.sel];
+  r2UpdateSelBar();
+  var row=c.closest('.frow');if(row)row.className='frow'+(c.checked?' sel':'');
+});
+/* ---- 上传 (文件选择框里按住 Ctrl 可多选) ---- */
+$('r2upload').onclick=function(){
+  if(!r2Bucket){toast('请先进入一个存储桶','err');return}
+  $('r2file').click();
+};
+$('r2file').addEventListener('change',async function(){
+  var files=this.files;
+  if(!files||!files.length)return;
+  if(!r2Bucket){toast('请先进入一个存储桶','err');return}
+  var fd=new FormData();
+  fd.append('acc',curAcc);fd.append('bucket',r2Bucket);fd.append('prefix',r2Prefix);
+  for(var i=0;i<files.length;i++)fd.append('files',files[i]);
+  setBusy(true,'上传中 ('+files.length+' 个文件)...');
+  try{
+    var r=await fetch('/api/r2/upload',{method:'POST',body:fd});
+    if(r.status===401){location.replace('/');return}
+    var d=await r.json().catch(function(){return{}});
+    if(!r.ok)throw new Error(d.error||'上传失败');
+    if(d.failed&&d.failed.length)toast('已上传 '+(d.uploaded||[]).length+' 个, '+d.failed.length+' 个失败: '+d.failed[0].error,'err');
+    else toast('已上传 '+(d.uploaded||[]).length+' 个文件');
+    loadR2Objects(false);
+  }catch(e){fail(e)}
+  setBusy(false);
+  this.value='';
+});
+/* ---- 新建文件 / 文件夹 ---- */
+var r2CreateMode='file';
+function r2OpenCreate(mode){
+  if(!r2Bucket){toast('请先进入一个存储桶','err');return}
+  r2CreateMode=mode;
+  $('r2c_ttl').textContent=mode==='dir'?'新建文件夹':'新建文件';
+  $('r2c_name').value='';$('r2c_body').value='';
+  $('r2c_body_wrap').style.display=mode==='dir'?'none':'';
+  $('r2c_name').placeholder=mode==='dir'?'例如 photos (可含 / 建多级)':'例如 notes/hello.txt (可含 / 建子目录)';
+  openModal('mR2Create');
+  setTimeout(function(){$('r2c_name').focus()},50);
+}
+$('r2c_x').onclick=closeModal;$('r2c_cancel').onclick=closeModal;
+$('r2c_save').onclick=async function(){
+  var name=$('r2c_name').value.trim();
+  if(!name){toast('请填写名称','err');return}
+  var b=this;b.disabled=true;b.innerHTML='<span class="spin"></span> 创建中';
+  try{
+    if(r2CreateMode==='dir'){
+      await api('/api/r2/mkdir',{bucket:r2Bucket,prefix:r2Prefix,name:name});
+      toast('文件夹已创建');
+    }else{
+      await api('/api/r2/put',{bucket:r2Bucket,key:r2Prefix+name,content:$('r2c_body').value});
+      toast('文件已创建');
+    }
+    closeModal();loadR2Objects(false);
+  }catch(e){fail(e)}
+  b.disabled=false;b.innerHTML='创建';
+};
+$('r2newfile').onclick=function(){r2OpenCreate('file')};
+$('r2newdir').onclick=function(){r2OpenCreate('dir')};
+/* ---- 编辑文本文件 ---- */
+var r2EditKey='';
+async function r2OpenEdit(key){
+  r2EditKey=key;
+  $('r2e_name').textContent=key.split('/').pop();
+  $('r2e_body').value='';
+  openModal('mR2Edit');
+  try{
+    var d=await api('/api/r2/get',{bucket:r2Bucket,key:key});
+    $('r2e_body').value=d.content||'';
+  }catch(e){closeModal();fail(e)}
+}
+$('r2e_x').onclick=closeModal;$('r2e_cancel').onclick=closeModal;
+$('r2e_save').onclick=async function(){
+  var b=this;b.disabled=true;b.innerHTML='<span class="spin"></span> 保存中';
+  try{
+    await api('/api/r2/put',{bucket:r2Bucket,key:r2EditKey,content:$('r2e_body').value});
+    closeModal();toast('已保存');loadR2Objects(false);
+  }catch(e){fail(e)}
+  b.disabled=false;b.innerHTML='保存';
+};
+/* ---- 删除 (单文件 / 文件夹 / 复选框多选) ---- */
+async function r2Delete(sel){
+  var keys=sel.keys||[],prefixes=sel.prefixes||[];
+  var label=prefixes.length?('文件夹及其中全部文件'):('选中的 '+keys.length+' 个文件');
+  if(!(await askConfirm('确定删除'+label+'?\\n删除后无法恢复。','删除','删除')))return;
+  setBusy(true,'删除中...');
+  try{
+    var d=await api('/api/r2/delete',{bucket:r2Bucket,keys:keys,prefixes:prefixes});
+    if(d.failed&&d.failed.length)toast('已删除 '+d.deleted+' 个, '+d.failed.length+' 个失败','err');
+    else toast('已删除 '+d.deleted+' 个');
+    r2Sel={};loadR2Objects(false);
+  }catch(e){fail(e)}
+  setBusy(false);
+}
+$('r2delSel').onclick=function(){
+  var keys=[],prefixes=[];
+  Object.keys(r2Sel).forEach(function(k){
+    if(k.indexOf('dir:')===0)prefixes.push(k.slice(4));else keys.push(k.slice(5));
+  });
+  if(!keys.length&&!prefixes.length){toast('请先勾选要删除的文件','err');return}
+  r2Delete({keys:keys,prefixes:prefixes});
+};
+$('r2clearSel').onclick=function(){r2Sel={};renderR2List();};
+$('r2more').onclick=function(){loadR2Objects(true)};
+$('r2q').addEventListener('input',function(){
+  $('r2q').parentNode.className='search'+($('r2q').value?' has':'');
+  renderR2List();
+});
+$('r2qclear').onclick=function(){$('r2q').value='';$('r2q').parentNode.className='search';renderR2List();$('r2q').focus();};
 
 /* ---- 启动 ---- */
 show((location.hash||'').replace('#','')||'dash');
