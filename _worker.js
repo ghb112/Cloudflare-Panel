@@ -1230,28 +1230,36 @@ async function handleApi(request, env, path) {
   }
 
   if (path === "/api/r2/objects") {
-    // 列出某存储桶某前缀下的一层: 文件夹 (delimitedPrefixes) + 文件 (objects), 支持翻页
+    // 列出某存储桶某前缀下的一层: 不用 delimiter(真实 R2 用 delimiter 会丢掉空文件夹的占位对象),
+    // 取一页扁平列表, 在服务端按 key 推导一层文件夹 + 文件
     const bucket = str(d.bucket);
     if (!bucket) return json({ error: "请选择存储桶" }, 400);
     const prefix = String(d.prefix || "");
     const cursor = str(d.cursor);
-    const q = `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(prefix)}&delimiter=%2F&limit=1000`
+    const q = `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(prefix)}&limit=1000`
       + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
     const r = await cf(env, q);
     const res = r || {};
     const rawObjs = Array.isArray(res) ? res : (res.objects || []);
-    // 以 / 结尾的 0 字节对象是"新建文件夹"留下的占位, 不当文件展示。真实 R2 把这类占位对象放回 objects[] 而不是 delimitedPrefixes, 所以文件夹要从两处合并 (去重), 只取当前目录的直接子级
-    const folderSet = new Set((res.delimitedPrefixes || res.delimited_prefixes || []).map((p) => String(p)));
-    rawObjs.forEach((o) => {
-      if (!o || !o.key || o.size) return;
+    const folderSet = new Set();
+    const objects = [];
+    for (const o of rawObjs) {
+      if (!o || !o.key) continue;
       const k = String(o.key);
-      if (!k.endsWith("/") || !k.startsWith(prefix) || k.length <= prefix.length) return;
+      if (!k.startsWith(prefix)) continue;
       const rest = k.slice(prefix.length);
-      if (rest.indexOf("/") !== rest.length - 1) return; // 只收直接子级
-      folderSet.add(k);
+      if (!rest) continue; // key 本身等于当前前缀 (本目录的占位), 不展示
+      const i = rest.indexOf("/");
+      if (i >= 0) folderSet.add(prefix + rest.slice(0, i + 1)); // 有下级: 归入直接子文件夹
+      else objects.push(o);
+    }
+    // 兼容: 个别返回里仍带 delimitedPrefixes 时也合并进来
+    (res.delimitedPrefixes || res.delimited_prefixes || []).forEach((p) => {
+      let s = String(p);
+      if (!s.endsWith("/")) s += "/";
+      if (s.startsWith(prefix) && s.length > prefix.length) folderSet.add(s);
     });
     const folders = [...folderSet];
-    const objects = rawObjs.filter((o) => o && o.key && !(String(o.key).endsWith("/") && !o.size));
     return json({
       bucket, prefix,
       objects: objects.map((o) => ({ key: o.key, name: String(o.key).slice(prefix.length), size: o.size || 0, uploaded: o.uploaded || "", etag: o.etag || "" })),
@@ -1445,7 +1453,7 @@ const LOGIN_HTML = `<!doctype html>
 <html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#f6821f">
-<title>登录 · Cloudflare Argo Control</title>
+<title>登录 · 大爷Cloudflare Control</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
 body{min-height:100vh;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;
@@ -1498,8 +1506,8 @@ button.oks{opacity:1;background:linear-gradient(135deg,#17a35f,#2ecc7d);box-shad
 <div class="wrap">
   <form class="card" id="f" novalidate>
     <div class="logo">${CF_LOGO}</div>
-    <h1>Cloudflare Argo Control</h1>
-    <p class="sub">Tunnel 管理与 Telegram 上下线提醒</p>
+    <h1>大爷Cloudflare Control</h1>
+    <p class="sub">Tunnel 管理与 R2 管理</p>
     <div class="field">
       <span class="li"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
       <input id="pw" type="password" name="password" placeholder="请输入访问密码" autocomplete="current-password" autofocus>
@@ -1961,7 +1969,7 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
           <div id="r2list"><div class="empty">加载中...</div></div>
           <div style="text-align:center;margin-top:12px"><button class="btn gray" id="r2more" style="display:none">加载更多</button></div>
         </div>
-        <div class="hint" style="margin-top:10px">右键点击文件 / 文件夹或空白处可调出操作菜单 (手机上点每行右侧的 ⋯ 按钮)；上传时在文件选择框里按住 Ctrl 可多选；删除时勾选复选框可多选。共享链接任何人打开都可直接下载，请勿分享敏感文件。</div>
+        <div class="hint" style="margin-top:10px">点击文件可选中；每行末尾有分享、下载、删除按钮；右键点击文件 / 文件夹或空白处可调出操作菜单 (手机上点每行右侧的 ⋯ 按钮)；上传时在文件选择框里按住 Ctrl 可多选；删除时勾选复选框可多选。共享链接任何人打开都可直接下载，请勿分享敏感文件。</div>
       </section>
 
       <section class="view" id="v-tg">
@@ -2932,17 +2940,17 @@ async function loadR2Objects(append){
 function renderR2List(){
   var box=$('r2list');
   var q=$('r2q').value.trim().toLowerCase();
-  var folders=r2Folders.filter(function(f){return !q||f.name.toLowerCase().indexOf(q)>=0});
+  var seenF={};var folders=r2Folders.filter(function(f){if(seenF[f.prefix])return false;seenF[f.prefix]=true;return !q||f.name.toLowerCase().indexOf(q)>=0});
   var objs=r2Objects.filter(function(o){return !q||o.name.toLowerCase().indexOf(q)>=0});
   $('r2sum').textContent=(r2Folders.length+r2Objects.length)+' 项'+(r2Truncated?' (还有更多, 点下方加载更多)':'');
   $('r2more').style.display=r2Truncated?'':'none';
   if(!folders.length&&!objs.length){box.innerHTML='<div class="empty">当前目录为空，右键空白处可上传 / 新建</div>';return}
   var h='';
   folders.forEach(function(f){
-    h+='<div class="frow" data-kind="dir" data-key="'+esc(f.prefix)+'"><input type="checkbox" data-sel="dir:'+esc(f.prefix)+'"'+(r2Sel['dir:'+f.prefix]?' checked':'')+'><span class="fi">📁</span><span class="fn">'+esc(f.name)+'</span><span class="fm">文件夹</span><button class="btn sm gray" data-r2menu="dir" data-key="'+esc(f.prefix)+'">⋯</button></div>';
+    h+='<div class="frow" data-kind="dir" data-key="'+esc(f.prefix)+'"><input type="checkbox" data-sel="dir:'+esc(f.prefix)+'"'+(r2Sel['dir:'+f.prefix]?' checked':'')+'><span class="fi">📁</span><span class="fn">'+esc(f.name)+'</span><span class="fm">文件夹</span><button class="btn sm gray" data-r2del="dir" data-key="'+esc(f.prefix)+'" title="删除文件夹">🗑</button><button class="btn sm gray" data-r2menu="dir" data-key="'+esc(f.prefix)+'">⋯</button></div>';
   });
   objs.forEach(function(o){
-    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+r2FileIcon(o.name)+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2share="1" data-key="'+esc(o.key)+'" title="共享链接">🔗</button><button class="btn sm gray" data-r2menu="file" data-key="'+esc(o.key)+'">⋯</button></div>';
+    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+r2FileIcon(o.name)+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2share="1" data-key="'+esc(o.key)+'" title="共享链接">🔗</button><button class="btn sm gray" data-r2dl="1" data-key="'+esc(o.key)+'" title="下载">⬇️</button><button class="btn sm gray" data-r2del="file" data-key="'+esc(o.key)+'" title="删除">🗑</button><button class="btn sm gray" data-r2menu="file" data-key="'+esc(o.key)+'">⋯</button></div>';
   });
   box.innerHTML=h;
   r2UpdateSelBar();
@@ -3011,6 +3019,10 @@ document.addEventListener('click',function(e){
   if(t){e.stopPropagation();var r=t.getBoundingClientRect();r2ShowMenu(r.left,r.bottom+4,r2MenuFor(t.dataset.r2menu),{kind:t.dataset.r2menu,key:t.dataset.key});return}
   var sh=e.target.closest('[data-r2share]');
   if(sh){r2OpenShare(sh.dataset.key);return}
+  var dl=e.target.closest('[data-r2dl]');
+  if(dl){r2Download(dl.dataset.key);return}
+  var del=e.target.closest('[data-r2del]');
+  if(del){r2Delete(del.dataset.r2del==='dir'?{prefixes:[del.dataset.key]}:{keys:[del.dataset.key]});return}
   var m=e.target.closest('#r2menu [data-m]');
   if(m){r2MenuAction(m.dataset.m);return}
   var bk=e.target.closest('[data-r2bk]');
@@ -3020,7 +3032,7 @@ document.addEventListener('click',function(e){
   var row=e.target.closest('.frow');
   if(row&&!e.target.closest('input[type=checkbox]')&&!e.target.closest('button')){
     if(row.dataset.kind==='dir')r2EnterDir(row.dataset.key);
-    else r2Download(row.dataset.key);
+    else{var cb=row.querySelector('input[type=checkbox]');if(cb){cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));}}
     return;
   }
 });
