@@ -1863,6 +1863,7 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
 .frow:hover{background:var(--frowhov)}
 .frow.sel{background:var(--sel)}
 .frow .fi{flex:none;width:20px;text-align:center;font-size:16px}
+.frow .fi img.r2thumb{width:20px;height:20px;object-fit:cover;border-radius:4px;display:block;margin:0 auto}
 .frow .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
 .frow .fm{flex:none;font-size:12px;color:var(--sub);white-space:nowrap}
 .frow input[type=checkbox]{order:-1;flex:none;width:16px;height:16px;padding:0;margin:0;accent-color:#f6821f;cursor:pointer}
@@ -2915,9 +2916,12 @@ function fmtTime(s){if(!s)return '';var d=new Date(s);if(isNaN(d))return String(
 function r2ShareUrl(bucket,key){return location.origin+'/s/'+curAcc+'/'+bucket+'/'+String(key).split('/').map(encodeURIComponent).join('/');}
 function r2SelCount(){return Object.keys(r2Sel).length;}
 function r2UpdateSelBar(){var n=r2SelCount();$('r2selbar').className=n?'r2selbar show':'r2selbar';$('r2selct').textContent='已选 '+n+' 项';}
+var R2_IMG_EXTS=['png','jpg','jpeg','gif','webp','svg','bmp','ico','avif'];
+function r2IsImage(name){var ext=String(name).split('.').pop().toLowerCase();return R2_IMG_EXTS.indexOf(ext)>=0;}
+function r2ImgErr(el){try{el.replaceWith('🖼️')}catch(e){}}
 function r2FileIcon(name){
   var ext=String(name).split('.').pop().toLowerCase();
-  if(['png','jpg','jpeg','gif','webp','svg','bmp','ico'].indexOf(ext)>=0)return '🖼️';
+  if(R2_IMG_EXTS.indexOf(ext)>=0)return '🖼️';
   if(['mp4','mov','webm','mkv'].indexOf(ext)>=0)return '🎬';
   if(['mp3','wav','flac','ogg'].indexOf(ext)>=0)return '🎵';
   if(['zip','rar','7z','tar','gz'].indexOf(ext)>=0)return '📦';
@@ -2974,7 +2978,7 @@ function renderR2List(){
     h+='<div class="frow" data-kind="dir" data-key="'+esc(f.prefix)+'"><input type="checkbox" data-sel="dir:'+esc(f.prefix)+'"'+(r2Sel['dir:'+f.prefix]?' checked':'')+'><span class="fi">📁</span><span class="fn">'+esc(f.name)+'</span><span class="fm">文件夹</span><button class="btn sm gray" data-r2del="dir" data-key="'+esc(f.prefix)+'" title="删除文件夹">🗑</button></div>';
   });
   objs.forEach(function(o){
-    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+r2FileIcon(o.name)+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2share="1" data-key="'+esc(o.key)+'" title="共享链接">🔗</button><button class="btn sm gray" data-r2dl="1" data-key="'+esc(o.key)+'" title="下载">⬇️</button><button class="btn sm gray" data-r2edit="1" data-key="'+esc(o.key)+'" title="编辑">✏️</button><button class="btn sm gray" data-r2del="file" data-key="'+esc(o.key)+'" title="删除">🗑</button></div>';
+    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+(r2IsImage(o.name)?'<img class="r2thumb" src="'+esc(r2ShareUrl(r2Bucket,o.key))+'" alt="" loading="lazy" onerror="r2ImgErr(this)">':r2FileIcon(o.name))+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2share="1" data-key="'+esc(o.key)+'" title="共享链接">🔗</button><button class="btn sm gray" data-r2dl="1" data-key="'+esc(o.key)+'" title="下载">⬇️</button><button class="btn sm gray" data-r2edit="1" data-key="'+esc(o.key)+'" title="编辑">✏️</button><button class="btn sm gray" data-r2del="file" data-key="'+esc(o.key)+'" title="删除">🗑</button></div>';
   });
   box.innerHTML=h;
   r2UpdateSelBar();
