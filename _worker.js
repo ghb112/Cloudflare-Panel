@@ -1729,7 +1729,7 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
 .scroll-y{max-height:395px;overflow-y:auto;overscroll-behavior:contain}
 .actcard{flex:1;min-height:0;display:flex;flex-direction:column}
 .actcard h3{flex:none}
-/* 活动列表: 最多显示 4 条 (renderAct 截断), 超出内部滚动; 不把左栏下沿撑高 */
+/* 活动列表: 全部显示 (后端最多存 24 条), 超出 240px 内部滚动; 不把左栏下沿撑高 */
 .actcard #acts{flex:1;min-height:0;max-height:240px;overflow-y:auto}
 /* 仪表板 fit 模式: 仅 PC (≥761px) 生效 — 占满视口、卡片内部滚动、整页不滚动、github 链接不出屏。
    手机由媒体查询直接禁用这些规则, fit 类残留也不会隐藏内容 */
@@ -2467,7 +2467,7 @@ function renderAct(list){
   var K={add:['创建隧道','var(--ok)'],del:['删除隧道','var(--bad)'],off:['隧道离线','var(--bad)'],on:['隧道恢复在线','var(--ok)'],
     r2up:['上传文件','var(--ok)'],r2save:['保存文件','var(--ok)'],r2mkdir:['新建文件夹','var(--ok)'],
     r2del:['删除文件','var(--bad)'],r2deld:['删除文件夹','var(--bad)']};
-  box.innerHTML=list.slice(0,4).map(function(a){
+  box.innerHTML=list.map(function(a){
     var k=K[a.k]||['事件','var(--sub)'];
     return '<div class="act"><span class="ad" style="background:'+k[1]+'"></span>'+
       '<div class="at">'+k[0]+' <b>'+esc(a.n)+'</b>'+(a.d?'<span class="as">'+esc(a.d)+'</span>':'')+'</div>'+
