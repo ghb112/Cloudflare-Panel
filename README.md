@@ -1,8 +1,8 @@
 <div align="center">
 
-# ⛅ Cloudflare Tunnel Pannel
+# ⛅ Cloudflare Tunnel and R2 Pannel
 
-**Cloudflare Tunnel 多账号可视化管理面板**
+**Cloudflare Tunnel and R2 多账号可视化管理面板**
 
 *单文件 Worker · 无需构建 · 无外部依赖*
 
@@ -16,14 +16,22 @@
 
 </div>
 
+> 💡 **二次修改说明**：本项目基于原作者 **佬王** 的 [Cloudflare Tunnel Panel](https://github.com/eooce/cloudflare-tunnel-panel) 进行二次修改，在原有 Tunnel 管理功能的基础上，**新增了完整的 R2 存储桶管理功能**（详见 [🪣 R2 存储桶管理](#-r2-存储桶管理新增)）。
+
 ---
 
 ## 🖼️ 界面预览
 
 <div align="center">
-  <img src="docs/login.png" width="32%" alt="登录页">
-  <img src="docs/dashboard.png" width="32%" alt="仪表板">
-  <img src="docs/tunnels.png" width="32%" alt="Tunnel 管理">
+<img src="docs/login.png" width="32%" alt="登录页">
+<img src="docs/dashboard.png" width="32%" alt="仪表板">
+<img src="docs/tunnels.png" width="32%" alt="Tunnel 管理">
+</div>
+
+<div align="center">
+<img src="docs/r2-buckets.png" width="32%" alt="R2 存储桶列表">
+<img src="docs/r2-files.png" width="32%" alt="R2 文件浏览与缩略图">
+<img src="docs/r2-activity.png" width="32%" alt="R2 活动记录">
 </div>
 
 ## ✨ 功能特性
@@ -33,31 +41,82 @@
 | 🔐 **密码登录** | 会话 Cookie 签名有效期 7 天，登录接口有防爆破延时，密码框支持显隐切换 |
 | 👥 **多账号管理** | 顶栏下拉切换 Cloudflare 账号；添加账号先验证再保存（Token 只存 D1/KV），列表/路由/提醒按账号隔离 |
 | 🖥️ **隧道管理** | 状态徽章（在线/降级/离线 + 运行时长）、搜索过滤、查看启动 Token、编辑（多路由可选中要改的那条）、删除 |
-| 🪣 **R2 存储桶** | 列出当前账号全部存储桶；进桶浏览文件/文件夹，上传（文件选择框里按住 Ctrl 多选）、下载、在线编辑文本文件、新建文件/文件夹、复选框多选删除；右键菜单操作；一键复制免登录共享下载链接 |
+| 🪣 **R2 存储桶** | 列出当前账号全部存储桶；进桶浏览文件/文件夹，上传（文件选择框里按住 Ctrl 多选）、下载、在线编辑文本文件（UTF-8/GBK）、新建文件/文件夹、复选框多选删除；图片缩略图；一键复制免登录共享下载链接；R2 操作记入仪表板活动记录 |
 | ➕ **新建隧道** | 选域名 + 子域名 + 可选路径 + 本地服务地址，自动创建隧道并配置 DNS CNAME |
 | 🌐 **多路由管理** | 单条隧道最多 60 条"域名 + 路径 → 服务"规则，自动处理 DNS，冲突时拒绝写入 |
 | 📣 **Telegram 提醒** | 状态**变化**才推送、按隧道逐个开关（默认关）、多接收者、暂停/恢复、测试发送 |
-| 🍩 **仪表板** | 总/在线/离线/账户数统计卡 + 域名分布环形图 + 最近活动 |
+| 🍩 **仪表板** | 总/在线/离线/账户数统计卡 + 域名分布环形图 + 最近活动（含 R2 操作记录，实时刷新） |
 | 🌗 **亮暗主题** | 跟随系统 + 手动切换，选择本地记忆 |
 | 📱 **PWA + 响应式** | 可安装到主屏，手机/平板/桌面自适应 |
 
 > 整个项目只有 **一个文件**：`_worker.js`（Worker 代码 + 内嵌管理页面）。
+
+## 🪣 R2 存储桶管理（新增）
+
+在原版 Tunnel 管理的基础上，新增了完整的 R2 存储桶管理功能，无需再到 Cloudflare 控制台操作文件。
+
+<div align="center">
+<img src="docs/r2-buckets.png" width="48%" alt="存储桶列表">
+<img src="docs/r2-files.png" width="48%" alt="文件浏览与缩略图">
+</div>
+
+### 存储桶与文件浏览
+
+- 侧栏 **R2 存储桶** 列出当前账号的全部存储桶，多账号切换时跟随当前账号。
+- 点进存储桶浏览文件/文件夹，面包屑导航，左上角 **‹ 存储桶** 可随时返回桶列表。
+- 文件夹按层级展开，中文、特殊字符文件名正常显示；大桶自动翻页（每页 1000 条，支持"加载更多"），不再只显示前 20 个。
+
+<div align="center">
+<img src="docs/r2-share.png" width="48%" alt="共享下载链接">
+<img src="docs/r2-edit.png" width="48%" alt="在线编辑文本文件">
+</div>
+
+### 上传、下载与共享
+
+- **上传**：点"上传文件"，在文件选择框里按住 Ctrl 可多选，一次传多个文件（分片上传）。
+- **下载**：点行尾 ⬇️ 下载单个文件。
+- **共享链接**：点行尾 🔗 生成免登录公开下载链接（`GET /s/<账号ID>/<桶>/<文件>`），任何人打开都可直接下载，支持 Range 断点续传；链接本身即凭证，请勿分享敏感文件。
+
+### 在线编辑文本文件
+
+- 点行尾 ✏️ 在线编辑文本文件（新建文件同理），2MB 以内，支持 **UTF-8 与 GBK** 两种编码（中文 Windows 批处理如.bat/.cmd 常为 GBK，可正常打开编辑）。
+- 可编辑格式：txt、md、json、js、css、html、xml、csv、log、yaml、yml、ini、sh、py、bat、cmd、ps1、tsx、ts。
+- 图片、视频、可执行文件、压缩包等点 ✏️ 会提示"此文件不可编辑！"，不会误打开编辑框。
+
+### 新建、删除与多选
+
+- **新建文件夹**：点"新建文件夹"，R2 没有真文件夹，实际是写入一个以 `/` 结尾的 0 字节占位对象。
+- **删除**：行尾 🗑 删除单个文件/文件夹（删文件夹会删掉其下全部文件）；勾选复选框可多选删除，一次操作只记一条活动记录。
+- 单击文件行只切换选中状态，不会误触发下载。
+
+### 图片缩略图
+
+- 图片文件（png/jpg/jpeg/gif/webp/svg/bmp/ico/avif）行前显示 20×20 预览缩略图，一眼确认选的文件对不对；非图片文件仍显示图标。
+
+<div align="center">
+<img src="docs/r2-activity.png" width="70%" alt="R2 活动记录">
+</div>
+
+### 活动记录
+
+- R2 的上传、保存、新建文件夹、删除文件/文件夹都会记入仪表板 **最近活动**，回到仪表板即实时刷新，无需手动点刷新。
+- 记录永久保存（D1 按条存储，不设上限），仪表板显示最新 100 条，可内部滚动查看；点卡片右上角 **清空** 可删除当前账号的全部活动记录（需确认）。
 
 ## 🚀 快速部署
 
 ### 方式一：Cloudflare Dashboard（推荐新手）
 
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **Create**，创建 Worker 并把 `_worker.js` 内容全部粘贴进去，保存。
-2. **【必须】绑定存储**：Settings → Bindings → 添加 **D1 Database**（变量名 `TUNNEL_DB`，建表见[下文](#-存储选择d1推荐或-kv)）或 **KV Namespace**（变量名 `TUNNEL_STATE`）。
-3. **【必须】配置环境变量**：Settings → Variables and Secrets，添加 `CF_API_TOKEN`、`CF_ACCOUNT_ID`、`PASSWORD`（详见[环境变量](#️-环境变量)）。
+2. **绑定存储**：Settings → Bindings → 添加 **D1 Database**（变量名 `TUNNEL_DB`，建表见[下文](#-存储选择d1推荐或-kv)）或 **KV Namespace**（变量名 `TUNNEL_STATE`）。
+3. **配置环境变量**：Settings → Variables and Secrets，添加 `CF_API_TOKEN`、`CF_ACCOUNT_ID`、`PASSWORD`（详见[环境变量](#️-环境变量)）。
 4. 打开 `https://<Worker 域名>/`，输入密码登录即可。
 
 ### 方式二：wrangler CLI
 
 ```bash
-wrangler d1 create tunnel-state   # 记下 database_id
+wrangler d1 create tunnel-state # 记下 database_id
 wrangler d1 execute tunnel-state --remote \
-  --command "CREATE TABLE IF NOT EXISTS state (k TEXT PRIMARY KEY, v TEXT NOT NULL)"
+--command "CREATE TABLE IF NOT EXISTS state (k TEXT PRIMARY KEY, v TEXT NOT NULL)"
 ```
 
 `wrangler.toml`：
@@ -73,7 +132,7 @@ database_name = "tunnel-state"
 database_id = "<上一步返回的 id>"
 
 [triggers]
-crons = ["*/5 * * * *"]   # 可选: 每 5 分钟后台检查一次并提醒
+crons = ["*/5 * * * *"] # 可选: 每 5 分钟后台检查一次并提醒
 ```
 
 ```bash
@@ -132,9 +191,9 @@ KV 有每日写入次数限制且存在最终一致延迟（写后立刻读可�
 1. Dashboard → Storage & Databases → D1 → Create，建一个数据库，名称随意（例如 **`tunnel-state`**）；
 2. 进入数据库控制台执行：
 
-   ```sql
-   CREATE TABLE IF NOT EXISTS state (k TEXT PRIMARY KEY, v TEXT NOT NULL);
-   ```
+```sql
+CREATE TABLE IF NOT EXISTS state (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+```
 
 3. Worker → Settings → Bindings → D1 Database，变量名填 **`TUNNEL_DB`**；
 4. 重新部署。未绑定 D1 时自动回退到 KV（`TUNNEL_STATE`），行为不变；两者同时绑定则 D1 优先。
@@ -154,9 +213,9 @@ KV 有每日写入次数限制且存在最终一致延迟（写后立刻读可�
 1. 在 Telegram 找 [@BotFather](https://t.me/BotFather)，`/newbot` 创建机器人，拿到 **Bot Token**。
 2. **想让谁收提醒，就让谁先给机器人发一条消息（或 `/start`）**——机器人无法主动私聊从未互动过的用户。
 3. 获取接收者的 chat_id：
-   - **个人私聊**：给 [@userinfobot](https://t.me/userinfobot) 发任意消息，它会回复你的**正数**数字 ID；
-   - **群组**：把机器人拉进群，群的 ID 为负数（超级群组通常 `-100` 开头）；
-   - **公开频道/群组**：直接填 `@用户名` 也可以，面板会解析成真实 chat_id 存入存储。
+- **个人私聊**：给 [@userinfobot](https://t.me/userinfobot) 发任意消息，它会回复你的**正数**数字 ID；
+- **群组**：把机器人拉进群，群的 ID 为负数（超级群组通常 `-100` 开头）；
+- **公开频道/群组**：直接填 `@用户名` 也可以，面板会解析成真实 chat_id 存入存储。
 4. 打开面板 → **Telegram 配置**：填入 chat_id（接收者，**不是机器人的 ID**）和 Bot Token，点"**测试发送**"确认可达，再点"**保存推送配置**"。
 5. 回到 **Tunnel 管理**，把需要监控的隧道从"🔕 提醒关"点成"🔔 提醒开"。
 
@@ -215,8 +274,8 @@ KV 有每日写入次数限制且存在最终一致延迟（写后立刻读可�
 
 <div align="center">
 
-**Argo Control** · Cloudflare Tunnel Manager
+**Argo Control** · Cloudflare Tunnel and R2 Manager
 
-💝 赞助商: [ForZTN](https://sponsorship.forztn.com/github.com/eooce/Cloudflare-Tunnel-Panel)
+💝 [大爷博客](https://blog.118558.xyz)
 
 </div>
