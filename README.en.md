@@ -1,8 +1,8 @@
 <div align="center">
 
-# ⛅ Cloudflare Tunnel Pannel
+# ⛅ Cloudflare Tunnel and R2 Pannel
 
-**Multi-account Cloudflare Tunnel Web Panel**
+**Multi-account Cloudflare Tunnel and R2 Web Panel**
 
 *Single-file Worker · Zero build · Zero dependencies*
 
@@ -16,6 +16,8 @@ English | **[简体中文](./README.md)**
 
 </div>
 
+> 💡 **Fork note**: This project is a fork of the original **Lao Wang**'s [Cloudflare Tunnel Panel](https://github.com/eooce/cloudflare-tunnel-panel), with a complete **R2 bucket management** feature added on top of the original Tunnel management (see [🪣 R2 Bucket Management](#-r2-bucket-management-new)).
+
 ---
 
 ## 🖼️ Screenshots
@@ -24,7 +26,12 @@ English | **[简体中文](./README.md)**
   <img src="docs/login.png" width="32%" alt="Login">
   <img src="docs/dashboard.png" width="32%" alt="Dashboard">
   <img src="docs/tunnels.png" width="32%" alt="Tunnel Management">
-  <br><img src="docs/mobile.png" width="22%" alt="Mobile">
+</div>
+
+<div align="center">
+  <img src="docs/r2-buckets.png" width="32%" alt="R2 Bucket List">
+  <img src="docs/r2-files.png" width="32%" alt="R2 Files and Thumbnails">
+  <img src="docs/r2-activity.png" width="32%" alt="R2 Activity Log">
 </div>
 
 ## ✨ Features
@@ -34,14 +41,66 @@ English | **[简体中文](./README.md)**
 | 🔐 **Password Login** | Signed session cookie valid for 7 days, brute-force delay on the login endpoint, show/hide password toggle |
 | 👥 **Multi-Account** | Switch Cloudflare accounts from the top bar dropdown; accounts are verified before being saved (tokens stored in D1/KV only); tunnels, routes and alert settings are isolated per account |
 | 🖥️ **Tunnel Management** | Status badges (online/degraded/offline + uptime), search filter, launch token viewer, edit (pick a specific route when there are many), delete |
+| 🪣 **R2 Buckets** | List all buckets of the current account; browse files/folders inside a bucket, upload (hold Ctrl in the file picker to select multiple), download, edit text files online (UTF-8/GBK), create files/folders, checkbox multi-delete; image thumbnails; one-click copy of a login-free public share link; R2 operations are recorded in the dashboard activity log |
 | ➕ **Create Tunnel** | Pick zone + subdomain + optional path + local service, tunnel and DNS CNAME are created automatically |
 | 🌐 **Route Management** | Up to 60 "hostname + path → service" ingress rules per tunnel, DNS handled automatically, conflicts are rejected |
 | 📣 **Telegram Alerts** | Push only on status **change**, per-tunnel toggle (**off by default**), multiple recipients, pause/resume, test send |
-| 🍩 **Dashboard** | Total/online/offline/accounts stat cards + domain distribution donut + recent activity |
+| 🍩 **Dashboard** | Total/online/offline/accounts stat cards + domain distribution donut + recent activity (including R2 operations, refreshed in real time) |
 | 🌗 **Themes** | Follows system + manual light/dark toggle, choice remembered locally |
 | 📱 **PWA + Responsive** | Installable to home screen, adaptive layout for phone/tablet/desktop |
 
 > The whole project is **a single file**: `_worker.js` (Worker code + embedded web UI).
+
+## 🪣 R2 Bucket Management (New)
+
+A complete R2 bucket management feature added on top of the original Tunnel management — no need to go to the Cloudflare dashboard to work with files.
+
+<div align="center">
+  <img src="docs/r2-buckets.png" width="48%" alt="Bucket List">
+  <img src="docs/r2-files.png" width="48%" alt="File Browsing and Thumbnails">
+</div>
+
+### Buckets and File Browsing
+
+- The sidebar **R2 Buckets** lists all buckets of the current account, and follows the account switcher for multi-account setups.
+- Click a bucket to browse its files and folders, with breadcrumb navigation; **‹ Buckets** in the top-left takes you back to the bucket list at any time.
+- Folders expand by level; Chinese and special-character filenames display correctly. Large buckets paginate automatically (1000 keys per page, with a "Load more" button) — no more showing only the first 20 items.
+
+<div align="center">
+  <img src="docs/r2-share.png" width="48%" alt="Share Download Link">
+  <img src="docs/r2-edit.png" width="48%" alt="Edit Text File Online">
+</div>
+
+### Upload, Download and Sharing
+
+- **Upload**: click "Upload", hold Ctrl in the file picker to select multiple files — they upload in one go (multipart upload).
+- **Download**: click ⬇️ at the end of a row to download a single file.
+- **Share link**: click 🔗 at the end of a row to generate a login-free public download link (`GET /s/<account-id>/<bucket>/<file>`). Anyone with the link can download directly, with Range resume support. The link itself is the credential — do not share sensitive files.
+
+### Edit Text Files Online
+
+- Click ✏️ at the end of a row to edit a text file online (creating a new file works the same way). Files up to 2MB, in **UTF-8 or GBK** encoding (Chinese Windows batch files such as .bat/.cmd are often GBK and open correctly).
+- Editable formats: txt, md, json, js, css, html, xml, csv, log, yaml, yml, ini, sh, py, bat, cmd, ps1, tsx, ts.
+- Clicking ✏️ on an image, video, executable, archive or other non-text file shows "This file cannot be edited!" instead of opening the editor by mistake.
+
+### Create, Delete and Multi-Select
+
+- **New folder**: click "New Folder". R2 has no real folders — this writes a zero-byte placeholder object ending in `/`.
+- **Delete**: 🗑️ at the end of a row deletes a single file or folder (deleting a folder removes everything under it). Tick the checkboxes to delete multiple files at once; one operation is logged as a single activity entry.
+- Clicking a file row only toggles its selection — it never triggers an accidental download.
+
+### Image Thumbnails
+
+- Image files (png/jpg/jpeg/gif/webp/svg/bmp/ico/avif) show a 20×20 preview thumbnail at the start of the row, so you can confirm the file at a glance. Non-image files keep their icons.
+
+<div align="center">
+  <img src="docs/r2-activity.png" width="70%" alt="R2 Activity Log">
+</div>
+
+### Activity Log
+
+- R2 uploads, saves, folder creation, file and folder deletions are all recorded in the dashboard **Recent Activity**. Switching back to the dashboard refreshes it in real time — no manual refresh needed.
+- Records are stored permanently (one D1 row per entry, no cap). The dashboard shows the newest 100 with internal scrolling; click **Clear** in the card header to delete all activity records of the current account (with confirmation).
 
 ## 🚀 Quick Start
 
@@ -49,7 +108,7 @@ English | **[简体中文](./README.md)**
 
 1. Sign in to the [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **Create**, create a Worker and paste the entire `_worker.js` into it, then save.
 2. **[Required] Bind storage**: Settings → Bindings → add a **D1 Database** (variable name `TUNNEL_DB`, schema [below](#-storage-d1-recommended-or-kv)) or a **KV Namespace** (variable name `TUNNEL_STATE`).
-3. **[Required] Set environment variables**: Settings → Variables and Secrets, add `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `PASSWORD` (see [Environment Variables](#️-environment-variables)).
+3. **[Required] Set environment variables**: Settings → Variables and Secrets, add `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `PASSWORD` (see [Environment Variables](#-environment-variables)).
 4. Open `https://<your-worker-domain>/` and sign in with your password.
 
 ### Option 2: wrangler CLI
@@ -112,6 +171,7 @@ When creating the API token (My Profile → API Tokens → Create Token → Cust
 | DNS & Zones | Account DNS Settings | Read + Edit |
 | DNS & Zones | DNS View | Read + Edit |
 | Cloudflare Tunnel (or Argo Tunnel) | Cloudflare Tunnel | Read + Edit |
+| Workers R2 Storage | Workers R2 Storage | Read + Edit |
 
 **Zone-level (Zone Resources = All zones):**
 
@@ -122,7 +182,7 @@ When creating the API token (My Profile → API Tokens → Create Token → Cust
 | DNS & Zones | Zone DNS Settings | Read + Edit |
 | DNS & Zones | Zone Settings | Read + Edit |
 
-> 💡 The minimal working set is: account-level `Cloudflare Tunnel → Edit` + zone-level `DNS → Read/Edit` and `Zone → Read`; the extra checks are harmless redundancy. A common mistake is configuring only account-level Account DNS Settings / DNS View (they manage account-wide DNS settings, **not** DNS records inside a zone), which causes "domain already has DNS records" errors or failed DNS cleanup after deleting a tunnel — the **zone-level `DNS → Edit`** permission is required.
+> 💡 The minimal working set is: account-level `Cloudflare Tunnel → Edit` + zone-level `DNS → Read/Edit` and `Zone → Read`; the extra checks are harmless redundancy. A common mistake is configuring only account-level Account DNS Settings / DNS View (they manage account-wide DNS settings, **not** DNS records inside a zone), which causes "domain already has DNS records" errors or failed DNS cleanup after deleting a tunnel — the **zone-level `DNS → Edit`** permission is required. To use **R2 bucket management**, the token also needs account-level `Workers R2 Storage → Read + Edit`, otherwise opening the R2 page reports "API token lacks R2 permission".
 
 ## 💾 Storage: D1 (Recommended) or KV
 
@@ -185,6 +245,10 @@ All endpoints require login (cookie session) except `/api/login`. All are `POST`
 | `/api/alert` | Per-tunnel alert toggle / skip one pending change |
 | `/api/tg` | Telegram config: save, test, add/remove recipients, pause/resume |
 | `/api/acc` | Accounts: list / add (verified first) / edit / delete / switch |
+| `/api/r2/buckets` `/api/r2/objects` | List buckets / list folders and files in a directory (paginated) |
+| `/api/r2/upload` `/api/r2/put` `/api/r2/get` | Multi-file upload / create & save text file / fetch text file content for editing |
+| `/api/r2/mkdir` `/api/r2/delete` | Create folder / delete file or folder (multi-select supported) |
+| `GET /s/<account-id>/<bucket>/<file>` | Login-free public share download link (Range resume supported) |
 
 ## ❓ FAQ
 
@@ -193,6 +257,7 @@ All endpoints require login (cookie session) except `/api/login`. All are `POST`
 - **"Invalid bot token"**: check that the Bot Token was copied completely and the bot wasn't revoked in BotFather.
 - **"Tunnel still has active connections, stop cloudflared first"**: stop the `cloudflared` process on the host before deleting (Cloudflare platform limitation).
 - **"This domain already has other DNS records"**: delete the conflicting record on the Zone's DNS page first, or pick another subdomain.
+- **"API token lacks R2 permission"**: add account-level `Workers R2 Storage → Read + Edit` to the API token (see [API Token Permissions](#-api-token-permissions)); for multi-account setups every account's token needs it.
 - **"DNS cleanup failed" (after deleting a tunnel/route)**: check that the API token has the **zone-level Zone → DNS → Edit** permission (see [API Token Permissions](#-api-token-permissions)); the account-level Account DNS Settings does not replace it. The toast shows the exact reason.
 - **Everyone gets logged out after changing the password**: without `SESSION_SECRET` the session key is derived from the password; setting a separate `SESSION_SECRET` avoids this.
 - **Migrating from an old "alerts on by default" version**: the new version defaults to off and runs a one-time migration — old data is cleared to off the first time the panel is opened.
@@ -200,6 +265,7 @@ All endpoints require login (cookie session) except `/api/login`. All are `POST`
 ## 🔒 Security
 
 - All Cloudflare API calls happen server-side in the Worker; tokens are never sent to the browser.
+- R2 public share links (`/s/...`) need no login — the link itself is the credential, so anyone with it can download directly. Do not share sensitive files.
 - The tunnel launch token (which can impersonate a tunnel) is fetched separately and only after login.
 - The login password comparison uses a constant-time algorithm to prevent timing side channels; repeated failures trigger a delay penalty.
 - Setting `SESSION_SECRET` is recommended, and adding Cloudflare Access in front of the Worker domain provides an optional second layer.
@@ -208,8 +274,8 @@ All endpoints require login (cookie session) except `/api/login`. All are `POST`
 
 <div align="center">
 
-**Argo Control** · Cloudflare Tunnel Manager
+**Argo Control** · Cloudflare Tunnel and R2 Manager
 
-💝 Sponsor: [ForZTN](https://sponsorship.forztn.com/github.com/eooce/Cloudflare-Tunnel-Panel)
+💝 [大爷博客](https://blog.118558.xyz)
 
 </div>

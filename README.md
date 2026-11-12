@@ -108,7 +108,7 @@
 
 1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **Create**，创建 Worker 并把 `_worker.js` 内容全部粘贴进去，保存。
 2. **绑定存储**：Settings → Bindings → 添加 **D1 Database**（变量名 `TUNNEL_DB`，建表见[下文](#-存储选择d1推荐或-kv)）或 **KV Namespace**（变量名 `TUNNEL_STATE`）。
-3. **配置环境变量**：Settings → Variables and Secrets，添加 `CF_API_TOKEN`、`CF_ACCOUNT_ID`、`PASSWORD`（详见[环境变量](#️-环境变量)）。
+3. **配置环境变量**：Settings → Variables and Secrets，添加 `CF_API_TOKEN`、`CF_ACCOUNT_ID`、`PASSWORD`（详见[环境变量](#-环境变量)）。
 4. 打开 `https://<Worker 域名>/`，输入密码登录即可。
 
 ### 方式二：wrangler CLI
