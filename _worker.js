@@ -3004,6 +3004,9 @@ function r2SelCount(){return Object.keys(r2Sel).length;}
 function r2UpdateSelBar(){var n=r2SelCount();$('r2selbar').className=n?'r2selbar show':'r2selbar';$('r2selct').textContent='已选 '+n+' 项';}
 var R2_IMG_EXTS=['png','jpg','jpeg','gif','webp','svg','bmp','ico','avif'];
 function r2IsImage(name){var ext=String(name).split('.').pop().toLowerCase();return R2_IMG_EXTS.indexOf(ext)>=0;}
+// 可在线编辑的文本格式 (其余如图片/视频/可执行文件/压缩包点 ✏️ 提示不可编辑)
+var R2_EDIT_EXTS=['txt','md','json','js','css','html','xml','csv','log','yaml','yml','ini','sh','py','bat','ps1','tsx','ts'];
+function r2IsEditable(name){var ext=String(name).split('.').pop().toLowerCase();return R2_EDIT_EXTS.indexOf(ext)>=0;}
 function r2ImgErr(el){try{el.replaceWith('🖼️')}catch(e){}}
 function r2FileIcon(name){
   var ext=String(name).split('.').pop().toLowerCase();
@@ -3171,6 +3174,7 @@ $('r2newdir').onclick=function(){r2OpenCreate('dir')};
 /* ---- 编辑文本文件 ---- */
 var r2EditKey='';
 async function r2OpenEdit(key){
+  if(!r2IsEditable(key)){toast('此文件不可编辑！','err');return}
   r2EditKey=key;
   $('r2e_name').textContent=key.split('/').pop();
   $('r2e_body').value='';
