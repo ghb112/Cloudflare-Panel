@@ -1397,7 +1397,12 @@ async function handleApi(request, env, path) {
     try {
       text = new TextDecoder("utf-8", { fatal: true }).decode(buf);
     } catch (e) {
-      return json({ error: "该文件不是文本文件, 无法在线编辑 (请下载后本地编辑)" }, 400);
+      // UTF-8 解码失败: 再试 GBK (中文 Windows 批处理/脚本常见编码, 如 .bat/.cmd)
+      try {
+        text = new TextDecoder("gbk", { fatal: true }).decode(buf);
+      } catch (e2) {
+        return json({ error: "该文件不是文本文件, 无法在线编辑 (请下载后本地编辑)" }, 400);
+      }
     }
     return json({ ok: true, content: text, size: buf.byteLength });
   }
