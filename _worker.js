@@ -3005,7 +3005,7 @@ function r2UpdateSelBar(){var n=r2SelCount();$('r2selbar').className=n?'r2selbar
 var R2_IMG_EXTS=['png','jpg','jpeg','gif','webp','svg','bmp','ico','avif'];
 function r2IsImage(name){var ext=String(name).split('.').pop().toLowerCase();return R2_IMG_EXTS.indexOf(ext)>=0;}
 // 可在线编辑的文本格式 (其余如图片/视频/可执行文件/压缩包点 ✏️ 提示不可编辑)
-var R2_EDIT_EXTS=['txt','md','json','js','css','html','xml','csv','log','yaml','yml','ini','sh','py','bat','ps1','tsx','ts'];
+var R2_EDIT_EXTS=['txt','md','json','js','css','html','xml','csv','log','yaml','yml','ini','sh','py','bat','cmd','ps1','tsx','ts'];
 function r2IsEditable(name){var ext=String(name).split('.').pop().toLowerCase();return R2_EDIT_EXTS.indexOf(ext)>=0;}
 function r2ImgErr(el){try{el.replaceWith('🖼️')}catch(e){}}
 function r2FileIcon(name){
