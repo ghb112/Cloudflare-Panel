@@ -2026,6 +2026,10 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
 .frow input[type=checkbox]{order:-1;flex:none;width:16px;height:16px;padding:0;margin:0;accent-color:#f6821f;cursor:pointer}
 .r2selbar{display:none;align-items:center;gap:10px;margin:0 0 12px;padding:9px 12px;border-radius:12px;background:rgba(246,130,31,.12);border:1px solid rgba(246,130,31,.35);font-size:13.5px}
 .r2selbar.show{display:flex}
+.r2selall{display:none;align-items:center;gap:8px;padding:2px 2px 10px;font-size:13.5px;color:var(--sub)}
+.r2selall.show{display:flex}
+.r2selall label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.r2selall input[type=checkbox]{width:16px;height:16px;accent-color:#f6821f;cursor:pointer}
 .r2edit{width:100%;min-height:min(56vh,540px);resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.6;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--in);color:var(--text);outline:none}
 .r2edit:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(246,130,31,.18)}
 @media(max-width:760px){
@@ -2150,11 +2154,12 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
         <div class="card">
           <h3><span id="r2title">存储桶</span><span class="hint" id="r2sum" style="margin:0"></span></h3>
           <div class="r2crumbs" id="r2crumbs" style="display:none"></div>
-          <div class="r2selbar" id="r2selbar"><span id="r2selct"></span><button class="btn sm gray" id="r2copySel">复制选中</button><button class="btn sm red" id="r2delSel">删除选中</button><button class="btn sm gray" id="r2clearSel">取消选择</button></div>
+          <div class="r2selbar" id="r2selbar"><span id="r2selct"></span><button class="btn sm gray" id="r2copySel">复制选中</button><button class="btn sm gray" id="r2cutSel">剪切选中</button><button class="btn sm red" id="r2delSel">删除选中</button><button class="btn sm gray" id="r2clearSel">取消选择</button></div>
+          <div class="r2selall" id="r2selall"><label><input type="checkbox" id="r2selAll"> 全选</label><span id="r2selallct"></span></div>
           <div id="r2list"><div class="empty">加载中...</div></div>
           <div style="text-align:center;margin-top:12px"><button class="btn gray" id="r2more" style="display:none">加载更多</button></div>
         </div>
-        <div class="hint" style="margin-top:10px">点击文件可选中；每行末尾有分享、下载、编辑、复制、删除按钮；点 📋 复制后，切换到目标文件夹（可跨存储桶）再点「粘贴」；上传时在文件选择框里按住 Ctrl 可多选；删除时勾选复选框可多选。共享链接任何人打开都可直接下载，请勿分享敏感文件。</div>
+        <div class="hint" style="margin-top:10px">点击文件可选中，勾选左上角「全选」可选中当前页全部文件/文件夹；每行末尾有分享、下载、编辑、复制、剪切、删除按钮；点 📋 复制或 ✂️ 剪切后，切换到目标文件夹（可跨存储桶）再点「粘贴」，剪切会在粘贴成功后删除原文件；上传时在文件选择框里按住 Ctrl 可多选；删除时勾选复选框可多选。共享链接任何人打开都可直接下载，请勿分享敏感文件。</div>
       </section>
 
       <section class="view" id="v-tg">
@@ -3138,6 +3143,30 @@ async function loadR2Objects(append){
     renderR2List();
   }catch(e){if(!append)box.innerHTML='<div class="empty">加载失败</div>';fail(e)}
 }
+/* ---- 全选: 当前页 (筛选后可见) 的文件/文件夹 ---- */
+function r2VisibleItems(){
+  var q=$('r2q').value.trim().toLowerCase();
+  var seenF={},items=[];
+  r2Folders.forEach(function(f){
+    if(seenF[f.prefix])return;seenF[f.prefix]=true;
+    if(!q||f.name.toLowerCase().indexOf(q)>=0)items.push('dir:'+f.prefix);
+  });
+  r2Objects.forEach(function(o){
+    if(!q||o.name.toLowerCase().indexOf(q)>=0)items.push('file:'+o.key);
+  });
+  return items;
+}
+function r2UpdateSelAll(){
+  var wrap=$('r2selall'),cb=$('r2selAll');
+  if(!wrap||!cb)return;
+  var items=r2VisibleItems();
+  if(!r2Bucket||!items.length){wrap.className='r2selall';cb.checked=false;cb.indeterminate=false;$('r2selallct').textContent='';return}
+  wrap.className='r2selall show';
+  var sel=items.filter(function(k){return r2Sel[k]}).length;
+  cb.checked=sel===items.length;
+  cb.indeterminate=sel>0&&sel<items.length;
+  $('r2selallct').textContent=sel?('已选 '+sel+' / '+items.length+' 项'):(items.length+' 项');
+}
 function renderR2List(){
   var box=$('r2list');
   var q=$('r2q').value.trim().toLowerCase();
@@ -3145,16 +3174,17 @@ function renderR2List(){
   var objs=r2Objects.filter(function(o){return !q||o.name.toLowerCase().indexOf(q)>=0});
   $('r2sum').textContent=(r2Folders.length+r2Objects.length)+' 项'+(r2Truncated?' (还有更多, 点下方加载更多)':'');
   $('r2more').style.display=r2Truncated?'':'none';
-  if(!folders.length&&!objs.length){box.innerHTML='<div class="empty">当前目录为空，右键空白处可上传 / 新建</div>';return}
+  if(!folders.length&&!objs.length){box.innerHTML='<div class="empty">当前目录为空，右键空白处可上传 / 新建</div>';r2UpdateSelBar();r2UpdateSelAll();return}
   var h='';
   folders.forEach(function(f){
-    h+='<div class="frow" data-kind="dir" data-key="'+esc(f.prefix)+'"><input type="checkbox" data-sel="dir:'+esc(f.prefix)+'"'+(r2Sel['dir:'+f.prefix]?' checked':'')+'><span class="fi">📁</span><span class="fn">'+esc(f.name)+'</span><span class="fm">文件夹</span><button class="btn sm gray" data-r2copy="dir" data-key="'+esc(f.prefix)+'" title="复制文件夹">📋</button><button class="btn sm gray" data-r2del="dir" data-key="'+esc(f.prefix)+'" title="删除文件夹">🗑</button></div>';
+    h+='<div class="frow" data-kind="dir" data-key="'+esc(f.prefix)+'"><input type="checkbox" data-sel="dir:'+esc(f.prefix)+'"'+(r2Sel['dir:'+f.prefix]?' checked':'')+'><span class="fi">📁</span><span class="fn">'+esc(f.name)+'</span><span class="fm">文件夹</span><button class="btn sm gray" data-r2copy="dir" data-key="'+esc(f.prefix)+'" title="复制文件夹">📋</button><button class="btn sm gray" data-r2cut="dir" data-key="'+esc(f.prefix)+'" title="剪切文件夹">✂️</button><button class="btn sm gray" data-r2del="dir" data-key="'+esc(f.prefix)+'" title="删除文件夹">🗑</button></div>';
   });
   objs.forEach(function(o){
-    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+(r2IsImage(o.name)?'<img class="r2thumb" src="'+esc(r2ShareUrl(r2Bucket,o.key))+'" alt="" loading="lazy" onerror="r2ImgErr(this)">':r2FileIcon(o.name))+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2share="1" data-key="'+esc(o.key)+'" title="共享链接">🔗</button><button class="btn sm gray" data-r2dl="1" data-key="'+esc(o.key)+'" title="下载">⬇️</button><button class="btn sm gray" data-r2edit="1" data-key="'+esc(o.key)+'" title="编辑">✏️</button><button class="btn sm gray" data-r2copy="file" data-key="'+esc(o.key)+'" title="复制">📋</button><button class="btn sm gray" data-r2del="file" data-key="'+esc(o.key)+'" title="删除">🗑</button></div>';
+    h+='<div class="frow" data-kind="file" data-key="'+esc(o.key)+'"><input type="checkbox" data-sel="file:'+esc(o.key)+'"'+(r2Sel['file:'+o.key]?' checked':'')+'><span class="fi">'+(r2IsImage(o.name)?'<img class="r2thumb" src="'+esc(r2ShareUrl(r2Bucket,o.key))+'" alt="" loading="lazy" onerror="r2ImgErr(this)">':r2FileIcon(o.name))+'</span><span class="fn" title="'+esc(o.key)+'">'+esc(o.name)+'</span><span class="fm">'+esc(fmtSize(o.size))+' · '+esc(fmtTime(o.uploaded))+'</span><button class="btn sm gray" data-r2share="1" data-key="'+esc(o.key)+'" title="共享链接">🔗</button><button class="btn sm gray" data-r2dl="1" data-key="'+esc(o.key)+'" title="下载">⬇️</button><button class="btn sm gray" data-r2edit="1" data-key="'+esc(o.key)+'" title="编辑">✏️</button><button class="btn sm gray" data-r2copy="file" data-key="'+esc(o.key)+'" title="复制">📋</button><button class="btn sm gray" data-r2cut="file" data-key="'+esc(o.key)+'" title="剪切">✂️</button><button class="btn sm gray" data-r2del="file" data-key="'+esc(o.key)+'" title="删除">🗑</button></div>';
   });
   box.innerHTML=h;
   r2UpdateSelBar();
+  r2UpdateSelAll();
 }
 function r2ExitBucket(){r2Bucket='';r2Prefix='';r2Sel={};r2Objects=[];r2Folders=[];loadR2Buckets();}
 function r2EnterBucket(b){r2Bucket=b;r2Prefix='';r2Sel={};loadR2Objects(false);}
@@ -3177,6 +3207,8 @@ document.addEventListener('click',function(e){
   if(ed){r2OpenEdit(ed.dataset.key);return}
   var cp=e.target.closest('[data-r2copy]');
   if(cp){r2Copy(cp.dataset.r2copy==='dir'?{dirs:[cp.dataset.key]}:{files:[cp.dataset.key]});return}
+  var ct=e.target.closest('[data-r2cut]');
+  if(ct){r2Cut(ct.dataset.r2cut==='dir'?{dirs:[ct.dataset.key]}:{files:[ct.dataset.key]});return}
   var del=e.target.closest('[data-r2del]');
   if(del){r2Delete(del.dataset.r2del==='dir'?{prefixes:[del.dataset.key]}:{keys:[del.dataset.key]});return}
   var bk=e.target.closest('[data-r2bk]');
@@ -3197,6 +3229,7 @@ document.addEventListener('change',function(e){
   if(!c)return;
   if(c.checked)r2Sel[c.dataset.sel]=true;else delete r2Sel[c.dataset.sel];
   r2UpdateSelBar();
+  r2UpdateSelAll();
   var row=c.closest('.frow');if(row)row.className='frow'+(c.checked?' sel':'');
 });
 /* ---- 上传 (文件选择框里按住 Ctrl 可多选) ---- */
@@ -3280,26 +3313,35 @@ $('r2e_save').onclick=async function(){
   b.disabled=false;b.innerHTML='保存';
 };
 /* ---- 删除 (单文件 / 文件夹 / 复选框多选) ---- */
-/* ---- 复制 / 粘贴 (剪贴板跨存储桶, 复制后切换桶/文件夹再粘贴) ---- */
-var r2Clip=null; // {acc, bucket, files:[], dirs:[]}
+/* ---- 复制 / 剪切 / 粘贴 (剪贴板跨存储桶, 复制后切换桶/文件夹再粘贴; 剪切在粘贴成功后删除原文件) ---- */
+var r2Clip=null; // {acc, bucket, files:[], dirs:[], cut:bool}
 function r2UpdatePasteBtn(){
   var b=$('r2paste');if(!b)return;
   if(r2Clip){
     var n=r2Clip.files.length+r2Clip.dirs.length;
-    b.style.display='';b.textContent='📋 粘贴 ('+n+' 项)';
+    b.style.display='';b.textContent=(r2Clip.cut?'✂️ 粘贴 (':'📋 粘贴 (')+n+' 项)';
   }else b.style.display='none';
 }
-function r2Copy(sel){
+function r2SetClip(sel,isCut){
   var files=sel.files||[],dirs=sel.dirs||[];
   var n=files.length+dirs.length;
-  if(!n){toast('请先选择要复制的文件或文件夹','err');return}
-  r2Clip={acc:curAcc,bucket:r2Bucket,files:files,dirs:dirs};
+  if(!n){toast('请先选择要'+(isCut?'剪切':'复制')+'的文件或文件夹','err');return}
+  r2Clip={acc:curAcc,bucket:r2Bucket,files:files,dirs:dirs,cut:!!isCut};
   r2UpdatePasteBtn();
   var first=(files[0]||dirs[0]||'').split('/').filter(function(s){return s;}).pop();
-  toast('已复制 '+(n===1?first:('共 '+n+' 项'))+'，切换到目标文件夹后点「粘贴」');
+  toast('已'+(isCut?'剪切':'复制')+' '+(n===1?first:('共 '+n+' 项'))+'，切换到目标文件夹后点「粘贴」'+(isCut?'（粘贴成功后删除原文件）':''));
+}
+function r2Copy(sel){r2SetClip(sel,false)}
+function r2Cut(sel){r2SetClip(sel,true)}
+function r2SelItems(){
+  var keys=[],prefixes=[];
+  Object.keys(r2Sel).forEach(function(k){
+    if(k.indexOf('dir:')===0)prefixes.push(k.slice(4));else keys.push(k.slice(5));
+  });
+  return {files:keys,dirs:prefixes};
 }
 async function r2Paste(){
-  if(!r2Clip){toast('剪贴板为空，请先复制文件或文件夹','err');return}
+  if(!r2Clip){toast('剪贴板为空，请先复制或剪切文件/文件夹','err');return}
   if(r2Clip.acc!==curAcc){toast('已切换账号，请重新复制','err');r2Clip=null;r2UpdatePasteBtn();return}
   if(r2Clip.bucket===r2Bucket){
     for(var i=0;i<r2Clip.dirs.length;i++){
@@ -3307,22 +3349,36 @@ async function r2Paste(){
       if(r2Prefix===p||r2Prefix.indexOf(p)===0){toast('不能把文件夹粘贴到自身或子文件夹','err');return}
     }
   }
-  setBusy(true,'粘贴中...');
+  setBusy(true,r2Clip.cut?'移动中...':'粘贴中...');
   try{
     var d=await api('/api/r2/copy',{srcBucket:r2Clip.bucket,dstBucket:r2Bucket,dstPrefix:r2Prefix,files:r2Clip.files,dirs:r2Clip.dirs});
-    if(d.failed&&d.failed.length)toast('已粘贴 '+d.copied+' 个, '+d.failed.length+' 个失败','err');
-    else toast('已粘贴 '+d.copied+' 个文件');
+    if(d.failed&&d.failed.length){
+      toast('已粘贴 '+d.copied+' 个, '+d.failed.length+' 个失败'+(r2Clip.cut?'；原文件未删除':''),'err');
+    }else if(r2Clip.cut){
+      // 全部复制成功才删源文件, 否则原文件会丢
+      try{
+        await api('/api/r2/delete',{bucket:r2Clip.bucket,keys:r2Clip.files,prefixes:r2Clip.dirs});
+      }catch(delErr){
+        toast('已粘贴 '+d.copied+' 个, 但删除原文件失败','err');
+        r2Clip=null;r2UpdatePasteBtn();loadR2Objects(false);setBusy(false);return;
+      }
+      toast('已移动 '+d.copied+' 个文件');
+      r2Clip=null;r2UpdatePasteBtn();
+    }else{
+      toast('已粘贴 '+d.copied+' 个文件');
+    }
     loadR2Objects(false);
   }catch(e){fail(e)}
   setBusy(false);
 }
 $('r2paste').onclick=function(){r2Paste()};
-$('r2copySel').onclick=function(){
-  var keys=[],prefixes=[];
-  Object.keys(r2Sel).forEach(function(k){
-    if(k.indexOf('dir:')===0)prefixes.push(k.slice(4));else keys.push(k.slice(5));
-  });
-  r2Copy({files:keys,dirs:prefixes});
+$('r2copySel').onclick=function(){r2Copy(r2SelItems())};
+$('r2cutSel').onclick=function(){r2Cut(r2SelItems())};
+$('r2selAll').onchange=function(){
+  var items=r2VisibleItems();
+  if(this.checked)items.forEach(function(k){r2Sel[k]=true});
+  else items.forEach(function(k){delete r2Sel[k]});
+  renderR2List();
 };
 async function r2Delete(sel){
   var keys=sel.keys||[],prefixes=sel.prefixes||[];
