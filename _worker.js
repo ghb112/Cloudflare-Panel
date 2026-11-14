@@ -1418,8 +1418,23 @@ async function handleApi(request, env, path) {
     return json({ ok: true, prefix: prefix + name + "/" });
   }
 
+  // 解析指定账号的调用环境 (跨账号操作时用): 返回 {acc, env}; 账号不存在返回 null
+  // 默认账号的 token 为空时回落到环境变量 CF_API_TOKEN
+  function accEnvFor(accId) {
+    const id = str(accId) || acc;
+    if (id === acc) return { acc, env };
+    const a = accountList(meta0, env).find((x) => x.acc === id);
+    if (!a) return null;
+    return { acc: a.acc, env: { ...env, cfToken: a.token || env.CF_API_TOKEN, cfAcc: a.acc } };
+  }
+
   if (path === "/api/r2/delete") {
     // 删除文件 (keys[]) 和文件夹 (prefixes[]: 删除该前缀下全部对象, 最多 5000 个)
+    // 可指定 delAcc 跨账号删除 (剪切粘贴后删源文件时用); 默认当前账号
+    const delAcc = str(d.delAcc) || acc;
+    const delResolved = accEnvFor(delAcc);
+    if (!delResolved) return json({ error: "账号不存在或已删除" }, 400);
+    const delAccId = delResolved.acc, delEnv = delResolved.env;
     const bucket = str(d.bucket);
     const keys = Array.isArray(d.keys) ? d.keys.map((k) => String(k)).filter(Boolean) : [];
     const prefixes = Array.isArray(d.prefixes) ? d.prefixes.map((p) => String(p)).filter(Boolean) : [];
@@ -1429,7 +1444,7 @@ async function handleApi(request, env, path) {
       let cursor = "";
       for (let i = 0; i < 10 && all.length < 5000; i++) {
         // 与列表接口同理: 分页参数是 per_page, 分页信息在 result_info 里
-        const j = await cfJson(env, `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(p)}&per_page=1000`
+        const j = await cfJson(delEnv, `/accounts/${delAccId}/r2/buckets/${encodeURIComponent(bucket)}/objects?prefix=${encodeURIComponent(p)}&per_page=1000`
           + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""));
         const objs = Array.isArray(j.result) ? j.result : (j.result.objects || []);
         for (const o of objs) if (o && o.key) all.push(o.key);
@@ -1442,7 +1457,7 @@ async function handleApi(request, env, path) {
     const failed = [];
     for (const key of [...new Set(all)]) {
       try {
-        await r2Raw(env, `/accounts/${acc}/r2/buckets/${encodeURIComponent(bucket)}/objects/${r2KeyPath(key)}`, "DELETE");
+        await r2Raw(delEnv, `/accounts/${delAccId}/r2/buckets/${encodeURIComponent(bucket)}/objects/${r2KeyPath(key)}`, "DELETE");
         deleted++;
       } catch (e) { failed.push({ key, error: String((e && e.message) || e) }); }
     }
@@ -1451,24 +1466,30 @@ async function handleApi(request, env, path) {
       var delName;
       if (isFolderOnly) {
         delName = prefixes.length === 1 ? prefixes[0].replace(/\/$/, "").split("/").pop() : ("共 " + prefixes.length + " 个文件夹");
-        await logAct(env, acc, "r2deld", delName, bucket);
+        await logAct(delEnv, delAccId, "r2deld", delName, bucket);
       } else {
         delName = deleted === 1 ? ([...new Set(all)][0] || "").replace(/\/$/, "").split("/").pop() : ("共 " + deleted + " 个文件");
-        await logAct(env, acc, "r2del", delName, bucket);
+        await logAct(delEnv, delAccId, "r2del", delName, bucket);
       }
     }
     return json({ ok: true, deleted, failed });
   }
 
   if (path === "/api/r2/copy") {
-    // 复制文件/文件夹到目标位置 (可跨桶, 同一账号内): 服务端 GET + PUT, 不经过浏览器;
+    // 复制文件/文件夹到目标位置 (可跨桶、可跨账号): 服务端 GET + PUT, 不经过浏览器;
+    // 读用源账号的 Token, 写用目标账号 (当前账号) 的 Token;
     // 目标已存在同名文件时自动改名 " (1)"、" (2)"..., 不覆盖
+    const srcAcc = str(d.srcAcc) || acc; // 源账号, 默认当前账号
     const srcBucket = str(d.srcBucket), dstBucket = str(d.dstBucket);
     const dstPrefix = String(d.dstPrefix || "");
     const files = Array.isArray(d.files) ? d.files.map((k) => String(k)).filter(Boolean) : [];
     const dirs = Array.isArray(d.dirs) ? d.dirs.map((k) => String(k)).filter(Boolean) : [];
     if (!srcBucket || !dstBucket || (!files.length && !dirs.length)) return json({ error: "请选择要复制的文件或文件夹" }, 400);
     if (dstPrefix !== "" && !validR2Key(dstPrefix)) return json({ error: "目标文件夹不合法" }, 400);
+    // 解析源账号的 Token (跨账号时读用源账号, 写用当前账号)
+    const srcResolved = accEnvFor(srcAcc);
+    if (!srcResolved) return json({ error: "源账号不存在或已删除, 请重新复制" }, 400);
+    const srcAccId = srcResolved.acc, srcEnv = srcResolved.env;
     // 目标已存在时自动改名: 在扩展名前加 " (1)"、" (2)"... (文件夹在末尾 / 前加)
     async function r2FreeKey(bucket, key) {
       const isDir = key.endsWith("/");
@@ -1495,8 +1516,8 @@ async function handleApi(request, env, path) {
     }
     for (const p of dirs) {
       if (!validR2Key(p)) return json({ error: "源文件夹不合法: " + p }, 400);
-      // 不能把文件夹复制到自身或子文件夹 (同桶时)
-      if (srcBucket === dstBucket && (dstPrefix === p || dstPrefix.indexOf(p) === 0)) {
+      // 不能把文件夹复制到自身或子文件夹 (同一账号同一桶时; 跨账号/跨桶不是自身)
+      if (srcAccId === acc && srcBucket === dstBucket && (dstPrefix === p || dstPrefix.indexOf(p) === 0)) {
         return json({ error: "不能把文件夹复制到自身或子文件夹" }, 400);
       }
       const folderName = p.replace(/\/$/, "").split("/").pop();
@@ -1505,7 +1526,7 @@ async function handleApi(request, env, path) {
       const dstFolderName = dstFolderKey.replace(/\/$/, "").split("/").pop();
       let cursor = "";
       for (let i = 0; i < 10 && jobs.length < 5000; i++) {
-        const j = await cfJson(env, `/accounts/${acc}/r2/buckets/${encodeURIComponent(srcBucket)}/objects?prefix=${encodeURIComponent(p)}&per_page=1000`
+        const j = await cfJson(srcEnv, `/accounts/${srcAccId}/r2/buckets/${encodeURIComponent(srcBucket)}/objects?prefix=${encodeURIComponent(p)}&per_page=1000`
           + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""));
         const objs = Array.isArray(j.result) ? j.result : (j.result.objects || []);
         for (const o of objs) {
@@ -1523,7 +1544,7 @@ async function handleApi(request, env, path) {
     for (const job of jobs) {
       try {
         const dstKey = await r2FreeKey(dstBucket, job.dstKey);
-        const r = await r2Raw(env, `/accounts/${acc}/r2/buckets/${encodeURIComponent(srcBucket)}/objects/${r2KeyPath(job.srcKey)}`);
+        const r = await r2Raw(srcEnv, `/accounts/${srcAccId}/r2/buckets/${encodeURIComponent(srcBucket)}/objects/${r2KeyPath(job.srcKey)}`);
         const buf = await r.arrayBuffer();
         const ct = r.headers.get("content-type") || "application/octet-stream";
         await r2PutObject(env, acc, dstBucket, dstKey, new Uint8Array(buf), ct);
@@ -2159,7 +2180,7 @@ background:var(--side2);color:var(--sub);font-size:12px;line-height:1;cursor:poi
           <div id="r2list"><div class="empty">加载中...</div></div>
           <div style="text-align:center;margin-top:12px"><button class="btn gray" id="r2more" style="display:none">加载更多</button></div>
         </div>
-        <div class="hint" style="margin-top:10px">点击文件可选中，勾选左上角「全选」可选中当前页全部文件/文件夹；每行末尾有分享、下载、编辑、复制、剪切、删除按钮；点 📋 复制或 ✂️ 剪切后，切换到目标文件夹（可跨存储桶）再点「粘贴」，剪切会在粘贴成功后删除原文件；上传时在文件选择框里按住 Ctrl 可多选；删除时勾选复选框可多选。共享链接任何人打开都可直接下载，请勿分享敏感文件。</div>
+        <div class="hint" style="margin-top:10px">点击文件可选中，勾选左上角「全选」可选中当前页全部文件/文件夹；每行末尾有分享、下载、编辑、复制、剪切、删除按钮；点 📋 复制或 ✂️ 剪切后，切换到目标文件夹（可跨存储桶、跨账号）再点「粘贴」，剪切会在粘贴成功后删除原文件；上传时在文件选择框里按住 Ctrl 可多选；删除时勾选复选框可多选。共享链接任何人打开都可直接下载，请勿分享敏感文件。</div>
       </section>
 
       <section class="view" id="v-tg">
@@ -3342,8 +3363,8 @@ function r2SelItems(){
 }
 async function r2Paste(){
   if(!r2Clip){toast('剪贴板为空，请先复制或剪切文件/文件夹','err');return}
-  if(r2Clip.acc!==curAcc){toast('已切换账号，请重新复制','err');r2Clip=null;r2UpdatePasteBtn();return}
-  if(r2Clip.bucket===r2Bucket){
+  // 跨账号粘贴也允许 (读用源账号 Token, 写用当前账号 Token); 只有同一账号同一桶才需防粘贴到自身
+  if(r2Clip.acc===curAcc&&r2Clip.bucket===r2Bucket){
     for(var i=0;i<r2Clip.dirs.length;i++){
       var p=r2Clip.dirs[i];
       if(r2Prefix===p||r2Prefix.indexOf(p)===0){toast('不能把文件夹粘贴到自身或子文件夹','err');return}
@@ -3351,13 +3372,13 @@ async function r2Paste(){
   }
   setBusy(true,r2Clip.cut?'移动中...':'粘贴中...');
   try{
-    var d=await api('/api/r2/copy',{srcBucket:r2Clip.bucket,dstBucket:r2Bucket,dstPrefix:r2Prefix,files:r2Clip.files,dirs:r2Clip.dirs});
+    var d=await api('/api/r2/copy',{srcAcc:r2Clip.acc,srcBucket:r2Clip.bucket,dstBucket:r2Bucket,dstPrefix:r2Prefix,files:r2Clip.files,dirs:r2Clip.dirs});
     if(d.failed&&d.failed.length){
       toast('已粘贴 '+d.copied+' 个, '+d.failed.length+' 个失败'+(r2Clip.cut?'；原文件未删除':''),'err');
     }else if(r2Clip.cut){
-      // 全部复制成功才删源文件, 否则原文件会丢
+      // 全部复制成功才删源文件, 否则原文件会丢; 跨账号时删除也要用源账号
       try{
-        await api('/api/r2/delete',{bucket:r2Clip.bucket,keys:r2Clip.files,prefixes:r2Clip.dirs});
+        await api('/api/r2/delete',{delAcc:r2Clip.acc,bucket:r2Clip.bucket,keys:r2Clip.files,prefixes:r2Clip.dirs});
       }catch(delErr){
         toast('已粘贴 '+d.copied+' 个, 但删除原文件失败','err');
         r2Clip=null;r2UpdatePasteBtn();loadR2Objects(false);setBusy(false);return;
